@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 
 #include "file_format.h"
 #include "script.h"
@@ -302,7 +303,9 @@ int goxel_unproject(const float viewport[4],
     for (i = 0; i < 10; i++) {
         if (!(snap_mask & (1 << i))) continue;
         if ((1 << i) == SNAP_VOLUME) {
-            r = goxel_unproject_on_volume(viewport, pos,
+            r = crystal_active() ?
+                    crystal_pick(cam, viewport, pos, p, n) :
+                    goxel_unproject_on_volume(viewport, pos,
                             goxel_get_layers_volume(goxel.image), p, n);
         }
         if ((1 << i) == SNAP_PLANE) {
@@ -508,6 +511,7 @@ void goxel_update_keymaps(void)
 
 void goxel_reset(void)
 {
+    crystal_reset();
     image_delete(goxel.image);
     goxel.image = image_new();
     goxel.lang = "en";
@@ -571,6 +575,7 @@ void goxel_reset(void)
 
 void goxel_release(void)
 {
+    crystal_reset();
     pathtracer_stop(&goxel.pathtracer);
     gui_release();
 }
@@ -606,7 +611,7 @@ static void update_window_title(void)
     bool changed;
 
     changed = image_get_key(goxel.image) != goxel.image->saved_key;
-    sprintf(buf, "Goxel %s%s %s%s%s",
+    sprintf(buf, "Crystal Goxel (Goxel %s)%s %s%s%s",
             GOXEL_VERSION_STR,
             DEBUG ? " (debug)" : "",
             changed ? "*" : "",
@@ -1141,7 +1146,9 @@ void goxel_render_view(const float viewport[4], bool render_mode)
 
     effects |= goxel.view_effects;
 
+    if (crystal_active()) crystal_render(rend, true);
     for (layer = goxel_get_render_layers(true); layer; layer = layer->next) {
+        if (crystal_active()) break;
         if (layer->visible && layer->volume)
             render_volume(rend, layer->volume, layer->material, effects);
     }
@@ -1332,7 +1339,8 @@ void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
     rend.items = NULL;
 
     // XXX: use goxel_get_render_layers!
-    render_volume(&rend, volume, NULL, 0);
+    if (crystal_active()) crystal_render(&rend, false);
+    else render_volume(&rend, volume, NULL, 0);
     render_submit(&rend, rect, (bpp == 3) ? goxel.back_color : NULL);
     tmp_buf = calloc(w * h * 4, bpp);
     texture_get_data(fbo, w * 2, h * 2, bpp, tmp_buf);

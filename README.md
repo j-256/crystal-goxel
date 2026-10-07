@@ -1,8 +1,11 @@
 
-Goxel
-=====
+# Crystal Goxel
 
-Version 0.15.1
+An offline Goxel fork for building Crystal Edit voxel objects in context of the native Crystal Project world. See [the prototype guide](CRYSTAL_BRIDGE.md) for supported game resources, desktop packaging, editing, import/export and verification.
+
+## Upstream Goxel
+
+Upstream source version 0.15.2
 
 By Guillaume Chereau <guillaume@noctua-software.com>
 

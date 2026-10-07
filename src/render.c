@@ -803,6 +803,19 @@ void render_grid(renderer_t *rend, const float plane[4][4],
     DL_APPEND(rend->items, item);
 }
 
+void render_mesh(renderer_t *rend, model3d_t *mesh, texture_t *texture,
+                 int effects)
+{
+    render_item_t *item = calloc(1, sizeof(*item));
+    item->type = ITEM_MODEL3D;
+    mat4_set_identity(item->mat);
+    item->tex = texture_copy(texture);
+    item->model3d = mesh;
+    copy_color(NULL, item->color);
+    item->effects = effects;
+    DL_APPEND(rend->items, item);
+}
+
 void render_img(renderer_t *rend, texture_t *tex, const float mat[4][4],
                 int effects)
 {

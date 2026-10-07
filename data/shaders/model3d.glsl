@@ -16,6 +16,7 @@ uniform mediump float u_l_emit;
 uniform mediump sampler2D u_tex;
 uniform mediump float     u_strip;
 uniform mediump float     u_time;
+uniform lowp float        u_alpha_cutoff;
 
 varying mediump vec3 v_normal;
 varying highp   vec3 v_pos;
@@ -55,6 +56,7 @@ void main()
 void main()
 {
     gl_FragColor = v_color * texture2D(u_tex, v_uv);
+    if (gl_FragColor.a < u_alpha_cutoff) discard;
     if (u_strip > 0.0) {
        mediump float p = gl_FragCoord.x + gl_FragCoord.y + u_time * 4.0;
        if (mod(p, 8.0) < 4.0) gl_FragColor.rgb *= 0.5;

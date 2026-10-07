@@ -18,6 +18,7 @@
 
 
 #include "goxel.h"
+#include "crystal.h"
 #include "file_format.h"
 #include <errno.h>
 
@@ -267,15 +268,25 @@ void save_to_file(const image_t *img, const char *path)
     camera_t *camera;
     material_t *material;
     volume_iterator_t iter;
+    size_t bridge_size;
+    char *bridge = NULL;
 
     img = img ?: goxel.image;
+    // Refuse before opening the destination if bridge metadata cannot be retained
+    if (!crystal_save_state(&bridge, &bridge_size)) return;
     out = fopen(path, "wb");
     if (!out) {
+        free(bridge);
         LOG_E("Cannot save to %s: %s", path, strerror(errno));
         return;
     }
     fwrite("GOX ", 4, 1, out);
     write_int32(out, VERSION);
+
+    if (bridge) {
+        chunk_write_all(out, "CPRF", bridge, bridge_size);
+        free(bridge);
+    }
 
     // Write image info.
     chunk_write_start(&c, out, "IMG ");
@@ -516,6 +527,8 @@ int load_from_file(const char *path, bool replace)
     int aabb[2][3];
     camera_t *camera, *camera_tmp;
     material_t *mat, *mat_tmp;
+    char *bridge_data = NULL;
+    size_t bridge_length = 0;
 
     in = fopen(path, "rb");
     if (!in) return -1;
@@ -531,6 +544,7 @@ int load_from_file(const char *path, bool replace)
     // Remove all layers, materials and camera.
     // XXX: should have a way to create a totally empty image instead.
     if (replace) {
+        crystal_reset();
         DL_FOREACH_SAFE(goxel.image->layers, layer, layer_tmp) {
             volume_delete(layer->volume);
             free(layer);
@@ -552,6 +566,15 @@ int load_from_file(const char *path, bool replace)
     }
 
     while (chunk_read_start(&c, in)) {
+        if (strncmp(c.type, "CPRF", 4) == 0 && replace) {
+            if (c.length < 0 || c.length > CRYSTAL_MAX_STATE) goto error;
+            free(bridge_data);
+            bridge_data = calloc(1, c.length + 1);
+            bridge_length = c.length;
+            chunk_read(&c, in, bridge_data, c.length, __LINE__);
+            chunk_read_finish(&c, in);
+            continue;
+        }
         if (strncmp(c.type, "BL16", 4) == 0) {
             png = calloc(1, c.length);
             chunk_read(&c, in, (char*)png, c.length, __LINE__);
@@ -701,11 +724,17 @@ int load_from_file(const char *path, bool replace)
     // Update plane, snap mask not to confuse people.
     plane_from_vectors(goxel.plane, goxel.image->box[3],
                        VEC(1, 0, 0), VEC(0, 1, 0));
+    if (bridge_data) {
+        crystal_restore_state(bridge_data, bridge_length);
+        free(bridge_data);
+    }
     image_history_push(goxel.image);
+    if (replace) goxel.image->saved_key = image_get_key(goxel.image);
 
     return 0;
 
 error:
+    free(bridge_data);
     fclose(in);
     return -1;
 }

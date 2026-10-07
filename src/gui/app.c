@@ -18,6 +18,7 @@
 
 #include "filters.h"
 #include "goxel.h"
+#include "crystal.h"
 
 #include "../ext_src/stb/stb_ds.h"
 
@@ -74,6 +75,7 @@ enum {
     PANEL_RENDER,
     PANEL_EXPORT,
     PANEL_DEBUG,
+    PANEL_CRYSTAL,
 };
 
 static struct {
@@ -82,6 +84,7 @@ static struct {
     void (*fn)(void);
     bool detached;
 } PANELS[] = {
+    [PANEL_CRYSTAL]     = {N_("Crystal Project"), ICON_IMAGE, crystal_panel},
     [PANEL_TOOLS]       = {N_("Tools"), ICON_TOOLS, gui_tools_panel},
     [PANEL_PALETTE]     = {N_("Palette"), ICON_PALETTE, gui_palette_panel},
     [PANEL_EDIT]        = {N_("Edit"), ICON_HAMMER, gui_edit_panel},
@@ -104,6 +107,11 @@ static struct {
 
 typedef struct filter_layout_state filter_layout_state_t;
 
+void crystal_show_panel(void)
+{
+    goxel.gui.current_panel = PANEL_CRYSTAL;
+}
+
 struct filter_layout_state {
     int next_x;
     int next_y;
@@ -120,6 +128,8 @@ static void render_left_panel(void)
     bool selected;
 
     for (i = 1; i < (int)ARRAY_SIZE(PANELS); i++) {
+        // Optional renderer and debug panels leave empty entries in release builds
+        if (!PANELS[i].name || !PANELS[i].fn) continue;
         selected = (goxel.gui.current_panel == i);
         if (gui_tab(tr(PANELS[i].name), PANELS[i].icon, &selected)) {
             on_click();

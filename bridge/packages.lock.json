@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "System.Security.Permissions": {
+        "type": "Direct",
+        "requested": "[10.0.5, )",
+        "resolved": "10.0.5",
+        "contentHash": "mhNFWI/5ljeEUT4nsJFK5ykecpyelRwN6Hy1x0hIJoqs5ssHJ9jr7hIkrjhbiE2Y4usuG1FpZr9S00Oei49aMg==",
+        "dependencies": {
+          "System.Windows.Extensions": "10.0.5"
+        }
+      },
+      "System.Windows.Extensions": {
+        "type": "Transitive",
+        "resolved": "10.0.5",
+        "contentHash": "5hVP2TIgEqqA590MnKmMN5+Fgzl6xBRjR1wbgC3M1znrZZJe63TwBPN+ymaMgwT0vjsiXk95AjMAe8SAhhJSTg=="
+      }
+    },
+    "net10.0/linux-arm64": {
+      "System.Windows.Extensions": {
+        "type": "Transitive",
+        "resolved": "10.0.5",
+        "contentHash": "5hVP2TIgEqqA590MnKmMN5+Fgzl6xBRjR1wbgC3M1znrZZJe63TwBPN+ymaMgwT0vjsiXk95AjMAe8SAhhJSTg=="
+      }
+    },
+    "net10.0/linux-x64": {
+      "System.Windows.Extensions": {
+        "type": "Transitive",
+        "resolved": "10.0.5",
+        "contentHash": "5hVP2TIgEqqA590MnKmMN5+Fgzl6xBRjR1wbgC3M1znrZZJe63TwBPN+ymaMgwT0vjsiXk95AjMAe8SAhhJSTg=="
+      }
+    },
+    "net10.0/osx-arm64": {
+      "System.Windows.Extensions": {
+        "type": "Transitive",
+        "resolved": "10.0.5",
+        "contentHash": "5hVP2TIgEqqA590MnKmMN5+Fgzl6xBRjR1wbgC3M1znrZZJe63TwBPN+ymaMgwT0vjsiXk95AjMAe8SAhhJSTg=="
+      }
+    },
+    "net10.0/osx-x64": {
+      "System.Windows.Extensions": {
+        "type": "Transitive",
+        "resolved": "10.0.5",
+        "contentHash": "5hVP2TIgEqqA590MnKmMN5+Fgzl6xBRjR1wbgC3M1znrZZJe63TwBPN+ymaMgwT0vjsiXk95AjMAe8SAhhJSTg=="
+      }
+    }
+  }
+}

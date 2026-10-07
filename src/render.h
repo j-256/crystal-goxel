@@ -45,6 +45,7 @@ enum {
     EFFECT_LINE_THICK       = 1 << 19,
 
     EFFECT_NO_DEPTH_TEST    = 1 << 20,
+    EFFECT_ALPHA_CUTOUT     = 1 << 21,
 };
 
 typedef struct {
@@ -80,6 +81,8 @@ void render_init(void);
 void render_deinit(void);
 void render_volume(renderer_t *rend, const volume_t *volume,
                  const material_t *material,
+                 int effects);
+void render_mesh(renderer_t *rend, model3d_t *mesh, texture_t *texture,
                  int effects);
 void render_grid(renderer_t *rend, const float plane[4][4],
                  const uint8_t color[4], const float clip_box[4][4]);

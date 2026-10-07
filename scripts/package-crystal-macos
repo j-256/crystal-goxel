@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+
+usage() {
+    cat <<'HELP'
+Usage: scripts/package-crystal-macos [-h|--help]
+Build an offline Crystal Goxel.app for the host Mac (arm64 or x64)
+
+Requires Xcode command line tools, Python 3, .NET SDK 10, pkg-config and GLFW
+The build restores pinned SCons and .NET runtime dependencies from the network
+The resulting app needs neither Python, .NET nor Homebrew to run
+Game resources are selected separately; none are bundled with the app
+No environment variables are required
+Output: dist/Crystal Goxel.app (existing generated output is replaced)
+Exit: 0 success/help, 1 build failure, 2 usage/precondition, 3 missing dependency
+HELP
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    --) shift ;;
+esac
+if [ "$#" -ne 0 ]; then usage >&2; exit 2; fi
+if [ "$(uname -s)" != Darwin ]; then
+    printf '%s\n' 'This package command requires macOS' >&2
+    exit 2
+fi
+for dependency in python3 dotnet pkg-config clang otool install_name_tool codesign plutil; do
+    if ! command -v "$dependency" >/dev/null 2>&1; then
+        printf 'Missing dependency: %s\n' "$dependency" >&2
+        exit 3
+    fi
+done
+if ! pkg-config --exists glfw3; then
+    printf '%s\n' 'Missing GLFW development package (brew install glfw pkgconf)' >&2
+    exit 3
+fi
+if ! dotnet --list-sdks | awk '/^10\./ {found=1} END {exit !found}'; then
+    printf '%s\n' 'Missing .NET SDK 10' >&2
+    exit 3
+fi
+case "$(uname -m)" in
+    arm64) runtime='osx-arm64' ;;
+    x86_64) runtime='osx-x64' ;;
+    *) printf '%s\n' 'Unsupported Mac architecture' >&2; exit 2 ;;
+esac
+project_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$project_root"
+if [ ! -x .build-env/bin/scons ]; then
+    python3 -m venv .build-env >&2
+    .build-env/bin/pip install 'scons==4.10.1' >&2
+fi
+glfw_directory="$(pkg-config --variable=libdir glfw3)"
+minimum_macos="$(otool -l "$glfw_directory/libglfw.3.dylib" | awk '$1 == "cmd" {minimum=($2 == "LC_BUILD_VERSION" || $2 == "LC_VERSION_MIN_MACOSX")} minimum && ($1 == "minos" || $1 == "version") {if ($2 + 0 > 13) print $2; else print "13.0"; exit}')"
+if [ -z "$minimum_macos" ]; then
+    printf '%s\n' 'Cannot determine GLFW macOS deployment target' >&2
+    exit 2
+fi
+# Pin compiler and linker targets so the bundle's declared minimum matches its Mach-O load commands
+CFLAGS="${CFLAGS:-} -mmacosx-version-min=$minimum_macos" \
+CXXFLAGS="${CXXFLAGS:-} -mmacosx-version-min=$minimum_macos" \
+LDFLAGS="${LDFLAGS:-} -mmacosx-version-min=$minimum_macos" \
+    .build-env/bin/scons -j8 mode=release yocto=0 >&2
+app='dist/Crystal Goxel.app'
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources/Bridge"
+dotnet publish bridge/CrystalBridge.csproj -c Release -r "$runtime" --self-contained true -p:RestoreLockedMode=true --nologo -o "$app/Contents/Resources/Bridge" >&2
+cp goxel "$app/Contents/MacOS/goxel"
+cp "$glfw_directory/libglfw.3.dylib" "$app/Contents/Frameworks/libglfw.3.dylib"
+glfw_link="$(otool -L goxel | awk '/libglfw/ {print $1; exit}')"
+install_name_tool -change "$glfw_link" '@executable_path/../Frameworks/libglfw.3.dylib' "$app/Contents/MacOS/goxel"
+install_name_tool -id '@executable_path/../Frameworks/libglfw.3.dylib' "$app/Contents/Frameworks/libglfw.3.dylib"
+cat > "$app/Contents/MacOS/CrystalGoxel" <<'LAUNCH'
+#!/bin/bash
+set -eu
+app_directory="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$app_directory/MacOS/goxel" --crystal-helper "$app_directory/Resources/Bridge/crystal-bridge" "$@"
+LAUNCH
+chmod +x "$app/Contents/MacOS/CrystalGoxel"
+cat > "$app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>CrystalGoxel</string>
+<key>CFBundleIdentifier</key><string>org.crystal-goxel.prototype</string>
+<key>CFBundleName</key><string>Crystal Goxel</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>LSMinimumSystemVersion</key><string>$minimum_macos</string>
+</dict></plist>
+PLIST
+cp COPYING "$app/Contents/Resources/Goxel-LICENSE.txt"
+cp licenses/GLFW-LICENSE.md "$app/Contents/Resources/GLFW-LICENSE.txt"
+plutil -lint "$app/Contents/Info.plist" >&2
+codesign --force --sign - "$app/Contents/Frameworks/libglfw.3.dylib" >&2
+codesign --force --sign - "$app/Contents/MacOS/goxel" >&2
+codesign --force --sign - "$app" >&2
+printf '%s/%s\n' "$project_root" "$app"

@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 #include "xxhash.h"
 
 
@@ -741,6 +742,10 @@ uint32_t image_get_key(const image_t *img)
     }
     key = XXH32(img->selection_box, sizeof(img->selection_box), key);
     k = volume_get_key(img->selection_mask);
+    key = XXH32(&k, sizeof(k), key);
+    // Bridge metadata belongs to the document, outside layer undo snapshots
+    // Include it in save/close checks so export settings cannot be lost silently
+    k = crystal_project_key();
     key = XXH32(&k, sizeof(k), key);
     return key;
 }

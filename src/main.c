@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 #include "script.h"
 #include <getopt.h>
 
@@ -63,6 +64,9 @@ typedef struct
 {
     char *input;
     char *export;
+    char *crystal_context;
+    char *crystal_helper;
+    char *crystal_smoke;
     float scale;
 
     const char *script;
@@ -73,6 +77,9 @@ typedef struct
 #define OPT_HELP 1
 #define OPT_VERSION 2
 #define OPT_SCRIPT 3
+#define OPT_CRYSTAL_CONTEXT 4
+#define OPT_CRYSTAL_HELPER 5
+#define OPT_CRYSTAL_SMOKE 6
 
 typedef struct {
     const char *name;
@@ -83,6 +90,12 @@ typedef struct {
 } gox_option_t;
 
 static const gox_option_t OPTIONS[] = {
+    {"crystal-context", OPT_CRYSTAL_CONTEXT, required_argument, "FILE",
+        .help="Open a prepared native Crystal Project context"},
+    {"crystal-helper", OPT_CRYSTAL_HELPER, required_argument, "FILE",
+        .help="Path to the crystal-bridge helper executable"},
+    {"crystal-smoke", OPT_CRYSTAL_SMOKE, required_argument, "PNG",
+        .help="Check native rendering, picking, save/reopen and export"},
     {"export", 'e', required_argument, "FILENAME",
         .help="Export the image to a file"},
     {"scale", 's', required_argument, "FLOAT", .help="Set UI scale"},
@@ -135,7 +148,7 @@ static void parse_options(int argc, char **argv, args_t *args)
     }
 
     while (true) {
-        c = getopt_long(argc, argv, "e:s:", long_options, &option_index);
+        c = getopt_long(argc, argv, "he:s:", long_options, &option_index);
         if (c == -1) break;
         switch (c) {
         case 'e':
@@ -144,17 +157,27 @@ static void parse_options(int argc, char **argv, args_t *args)
         case 's':
             args->scale = atof(optarg);
             break;
+        case OPT_CRYSTAL_CONTEXT:
+            args->crystal_context = optarg;
+            break;
+        case OPT_CRYSTAL_HELPER:
+            args->crystal_helper = optarg;
+            break;
+        case OPT_CRYSTAL_SMOKE:
+            args->crystal_smoke = optarg;
+            break;
+        case 'h':
         case OPT_HELP:
             print_help();
             exit(0);
         case OPT_VERSION:
-            printf("Goxel " GOXEL_VERSION_STR "\n");
+            printf("Crystal Goxel (Goxel " GOXEL_VERSION_STR ")\n");
             exit(0);
         case OPT_SCRIPT:
             args->script = optarg;
             break;
         case '?':
-            exit(-1);
+            exit(2);
         }
     }
     if (optind < argc) {
@@ -226,7 +249,6 @@ static void start_main_loop(void (*func)(void *arg), GLFWwindow *window)
         func(window);
         if (goxel.quit) break;
     }
-    glfwTerminate();
 }
 #else
 static void start_main_loop(void (*func)(void *arg), GLFWwindow *window)
@@ -322,7 +344,8 @@ static bool open_dialog(
     GLFWwindow *window = user;
 
     LOG_D("Open Dialog (mode=%s, default_path_and_file=%s)",
-          flags & 1 ? "Save" : "Open", default_path_and_file);
+          flags & 1 ? "Save" : "Open",
+          default_path_and_file ? default_path_and_file : "");
 
     filters_to_nfd_spec(filters, nfd_filters_spec, sizeof(nfd_filters_spec));
     filter.name = filters_desc;
@@ -331,7 +354,9 @@ static bool open_dialog(
     NFD_Init();
     NFD_GetNativeWindowFromGLFWWindow(window, &nfd_window);
 
-    if (flags & 1) { // Save dialog.
+    if (flags & 1) { // Save dialog
+        // Save requests may omit a suggestion; path helpers require a string
+        if (!default_path_and_file) default_path_and_file = "";
         path_dirname(default_path_and_file, default_path,
                      sizeof(default_path));
         path_basename(default_path_and_file, default_name,
@@ -381,6 +406,7 @@ int main(int argc, char **argv)
     sys_callbacks.set_clipboard_text = set_clipboard_text;
     sys_callbacks.open_dialog = open_dialog;
     parse_options(argc, argv, &args);
+    crystal_set_helper(args.crystal_helper);
 
     g_scale = args.scale;
 
@@ -388,6 +414,7 @@ int main(int argc, char **argv)
     glfwInit();
     glfwWindowHint(GLFW_SAMPLES, 4);
     glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
+    if (args.crystal_smoke) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     // Is there a clean way to create a maximized window
     // that works both on Windows, Mac and Linux?
@@ -398,12 +425,12 @@ int main(int argc, char **argv)
             width = mode->width ?: 640;
             height = mode->height ?: 480;
         }
-        window = glfwCreateWindow(width, height, "Goxel", NULL, NULL);
+        window = glfwCreateWindow(width, height, "Crystal Goxel", NULL, NULL);
         assert(window);
         glfwSetWindowPos(window, 0, 0);
     } else {
         glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
-	window = glfwCreateWindow(width, height, "Goxel", NULL, NULL);
+        window = glfwCreateWindow(width, height, "Crystal Goxel", NULL, NULL);
         assert(window);
     }
 
@@ -428,8 +455,24 @@ int main(int argc, char **argv)
         tests_run();
     }
 
-    if (args.input)
-        goxel_import_file(args.input, NULL);
+    if (args.input) {
+        // Opening a GOX document must restore its context, not append layers
+        if (str_endswith(args.input, ".gox"))
+            ret = load_from_file(args.input, true);
+        else
+            ret = goxel_import_file(args.input, NULL);
+        if (ret != 0) goto end;
+    }
+
+    if (args.crystal_context && !crystal_load(args.crystal_context, true)) {
+        ret = 2;
+        goto end;
+    }
+    if (crystal_active()) crystal_show_panel();
+    if (args.crystal_smoke) {
+        ret = crystal_smoke(args.crystal_smoke);
+        goto end;
+    }
 
     if (args.script) {
         script_run_from_file(args.script, args.script_args_nb, args.script_args);
@@ -447,7 +490,7 @@ int main(int argc, char **argv)
     }
     start_main_loop(loop_function, window);
 end:
-    glfwTerminate();
     goxel_release();
+    glfwTerminate();
     return ret;
 }

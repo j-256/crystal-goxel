@@ -14,3 +14,8 @@ xcuserdata/
 /compile_commands.json
 /TAGS
 /.cache
+/.build-env
+/bridge/bin/
+/bridge/obj/
+/dist/
+/build/
