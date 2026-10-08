@@ -2,9 +2,13 @@
 
 Crystal Goxel is an offline Goxel fork for building Crystal Edit voxel objects across a tiled view of the native Crystal Project world. The editor and viewport are C/C++17. A .NET 10 C# helper reads the user's game resources and invokes the original game's CPU mesh builders through reflection. No game assemblies, textures, world data or decompiled source are distributed with this repository.
 
-The prototype supports the fingerprinted Windows Crystal Project 1.6.9.0 installation and Crystal Edit source-project format 34. The desktop app has been exercised on an Apple Silicon Mac. Its helper launcher supports macOS and Linux; Windows desktop integration needs a process-launch adapter and testing. The native Mac game installation is not an accepted resource source.
+The prototype supports the fingerprinted Windows Crystal Project 1.6.9.0 installation and Crystal Edit source-project format 34. The desktop helper launcher supports Windows, macOS and Linux. The Windows x64 editor and self-contained helper have been cross-built and exercised in a Windows 11 x64 VM for process launching, synthetic checks and native world preparation. Native Windows process and synthetic helper checks are also configured in the Windows CI job. Windows graphical authoring and Crystal Edit UI behavior need testing on a Windows desktop. Native Mac authoring has been exercised on Apple Silicon. The native Mac game installation is not an accepted resource source.
 
 ## Build and open
+
+For Windows, follow the [Windows build instructions](README.md#build-the-windows-app) in the main guide. `scripts/package-crystal-windows` builds `dist/Crystal Goxel Windows` in an MSYS2 MINGW64 shell. Copy the complete folder to x64 Windows 11 and open `CrystalGoxel.exe`. The executable locates `Bridge/crystal-bridge.exe` relative to itself, independently of the working directory. Neither MSYS2 nor a separate .NET installation is required to use the package. Windows ARM64 and Windows 10 are not validated targets. The helper uses .NET 10; see its [supported OS matrix](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md) for the runtime support policy. An OpenGL-capable desktop graphics driver is required, providing OpenGL 2.1 with framebuffer object support. Unsupported drivers fail at startup with a diagnostic instead of entering the renderer.
+
+The Windows launcher uses Unicode Win32 APIs, explicit argument quoting and a restricted inherited-handle list so foreground and prefetch helpers can run concurrently. The executable's UTF-8 manifest keeps native dialog paths compatible with Goxel's narrow file APIs. Temporary helper workspaces use unique names in the user's temporary directory and are removed on success or failure. Packaged executables import only bundled or Windows system libraries; the package checker rejects missing DLL dependencies. The build is unsigned.
 
 On macOS, install Xcode command line tools, Python 3, .NET SDK 10, and `brew install glfw pkgconf`, then run:
 
@@ -73,9 +77,23 @@ Native shapes, UVs and variants come from the installed game's mesh builders. Cr
 
 The coordinate transform preserves orientation while changing the vertical axis. With native origin `(ox, oy, oz)`, a game cell `(x, y, z)` maps to Goxel cell `(x - ox, oz - z - 1, y - oy)`. Tiled documents fix this origin at `(0, 0, 0)` for every location; crop documents retain their original crop origin. The `-1` accounts for reversing a cell interval rather than a point. Per-triangle cell ownership keeps edge clicks and inset shapes on the correct grid cell. Reference geometry is never present in authored layer volumes or Crystal Edit exports.
 
-The helper checks executable, voxel database and native world fingerprints before invoking game code. ARM64 hosting retags only temporary copies of IL-only managed assemblies; it never changes installed files. Generated context and tile artifacts record source and asset SHA-256 values. The world manifest also retains the selected installation path for uncached tile preparation. These generated files include game content and belong with the user's private game resources.
+The helper checks executable, voxel database and native world fingerprints before invoking game code. Managed assemblies load from private byte copies in memory, avoiding Windows file locks and assembly cleanup failures. ARM64 hosting retags only those copies of IL-only managed assemblies; it never changes installed files. Generated context and tile artifacts record source and asset SHA-256 values. The world manifest also retains the selected installation path for uncached tile preparation. These generated files include game content and belong with the user's private game resources.
 
 ## Verification
+
+The Windows CI job packages the desktop app and self-contained helper, checks native DLL imports and notices, and runs the synthetic bridge checks from a path containing spaces and Unicode. It also builds and executes `tests/crystal_host_test.cpp` against the same host implementation used by the editor. This exercises real child argument round trips, shell metacharacters, empty arguments, quotes, trailing backslashes, Unicode executable and file paths, simultaneous launches, bounded output draining, nonzero exits, missing executables, helper discovery and temporary workspace cleanup. These checks need no game files. They do not replace the graphical native smoke check or in-game testing.
+
+For a Windows native render smoke check, prepare a private context with your supported installation, then run from PowerShell using new output filenames:
+
+```powershell
+& '.\dist\Crystal Goxel Windows\CrystalGoxel.exe' `
+  --crystal-context 'C:\private\world-cache\world.json' `
+  --crystal-smoke 'C:\private\windows-smoke.png'
+```
+
+Validation on 2026-10-08 covered a Windows 11 x64 VM: the host process contract, packaged helper checks, native world creation, tile preparation across boundaries, location lookup, and original-game construction checks passed. The VM display driver did not support OpenGL, and private Mesa software-renderer probes could not run the graphical smoke check. Startup failure handling was verified against that driver. Windows graphical editing, native file dialogs and Crystal Edit UI behavior remain unverified. Mac native rendering, authoring, save/reopen, combined exports and original-game construction checks passed with the same helper implementation.
+
+Windows CI does not have the user's game resources and cannot run the native-world graphical check. The CI job provides build, process and synthetic checks; a successful Windows desktop authoring run remains separate evidence.
 
 Synthetic checks exercise negative tile ownership, cross-edge neighbor sampling, coordinate transforms, bounded requests, offline cached views, failed preparation and asset tampering. Project checks cover distant locations in one document, supported and unsupported NPC imports, construction defaults, imported physics preservation, stable project and entity identity, editor-tree reservations, source order, exact large numbers and overwrite protection.
 
