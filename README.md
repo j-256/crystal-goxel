@@ -1,7 +1,7 @@
 
 # Crystal Goxel
 
-An offline Goxel fork for building Crystal Edit voxel objects in context of the native Crystal Project world. See [the prototype guide](CRYSTAL_BRIDGE.md) for supported game resources, desktop packaging, editing, import/export and verification.
+An offline Goxel fork for building Crystal Edit voxel objects across the native Crystal Project world. One authored document holds multiple locations; native terrain streams from a private tile cache, and every location exports together. See [the prototype guide](CRYSTAL_BRIDGE.md) for supported game resources, desktop packaging, editing, import/export and verification.
 
 ## Upstream Goxel
 
