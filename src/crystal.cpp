@@ -1197,8 +1197,7 @@ extern "C" void crystal_panel(void)
                     visit_location({ location_input[0], location_input[1],
                                      location_input[2] }, true);
                 gui_text("Loaded terrain tiles: %zu", state->tiles.size());
-                gui_checkbox("Load terrain while navigating",
-                             &state->follow_view,
+                gui_checkbox("Follow camera", &state->follow_view,
                              "Prepare terrain when the camera moves");
                 gui_text_wrapped("All locations share this mod. Brushes and "
                                  "shapes prepare terrain before editing.");
@@ -1251,7 +1250,9 @@ extern "C" void crystal_panel(void)
         }
         gui_text("World origin: %d, %d, %d", state->origin[0],
                  state->origin[1], state->origin[2]);
-        if (gui_combo_begin("Block", state->blocks[selected].name.c_str())) {
+        gui_text("Block");
+        if (gui_combo_begin("##crystal-block",
+                            state->blocks[selected].name.c_str())) {
             for (int i = 0; i < int(state->blocks.size()); i++) {
                 auto label = state->blocks[i].name + " [" +
                              std::to_string(state->blocks[i].id) + "]";
@@ -1264,7 +1265,8 @@ extern "C" void crystal_panel(void)
             gui_combo_end();
         }
         const char *variants[] = { "0", "1", "2", "3" };
-        if (gui_combo("Variant", &variant, variants,
+        gui_text("Variant");
+        if (gui_combo("##crystal-variant", &variant, variants,
                       state->blocks[selected].max_variant + 1))
             choose_block();
         if (gui_button("Use this block", 0, 0)) choose_block();
