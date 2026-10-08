@@ -9,7 +9,7 @@ Build a portable x64 Crystal Goxel folder from an MSYS2 MINGW64 shell
 
 Requires .NET SDK 10 on PATH, Git, Python 3.11+, SCons, MinGW GCC, GLFW, TRE and zlib
 MSYS2 packages: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw
-  mingw-w64-x86_64-libtre-git mingw-w64-x86_64-zlib scons
+  mingw-w64-x86_64-libtre mingw-w64-x86_64-zlib scons
 The build restores pinned .NET dependencies from the network
 The package runs offline without MSYS2 or a separate .NET installation
 Game resources are selected separately and are never bundled

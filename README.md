@@ -18,7 +18,7 @@ Install [MSYS2](https://www.msys2.org/) and [.NET SDK 10](https://dotnet.microso
 
 ```sh
 pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw \
-  mingw-w64-x86_64-libtre-git mingw-w64-x86_64-zlib scons
+  mingw-w64-x86_64-libtre mingw-w64-x86_64-zlib scons
 ```
 
 Make sure `dotnet --list-sdks` works in that shell; if needed, add `/c/Program Files/dotnet` to its `PATH`. From the repository root, run:

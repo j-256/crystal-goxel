@@ -31,7 +31,7 @@ jobs:
           msystem: MINGW64
           path-type: inherit
           update: true
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw mingw-w64-x86_64-libtre-git mingw-w64-x86_64-zlib scons make git
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw mingw-w64-x86_64-libtre mingw-w64-x86_64-zlib scons make git
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
