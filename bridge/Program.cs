@@ -12,6 +12,7 @@ Offline Crystal Project native world context and Crystal Edit project bridge
   tiles   --context world.json --min X,Y,Z --max X,Y,Z --output NEW_VIEW.json
   import  --context context.json --source PROJECT.json --output snapshot.json
   export  --context context.json --snapshot snapshot.json --output NEW_PROJECT.json
+  allocate --context CONTEXT.json --snapshot snapshot.json --output NEW_SNAPSHOT.json
   validate --context context.json
   check-entities --game DIR --source PROJECT.json
   check-construction --game DIR --source PROJECT.json
@@ -32,6 +33,7 @@ check-construction requires only stationary, unconditional voxel NPCs. It checks
 the original readers, air/liquid motion and solid player contacts in CPU fixtures.
 Export snapshots use format 1 with source text, managed mappings and authored
 cells. Optional newObjectsSolid is boolean, defaults to true, and affects new NPCs.
+allocate reserves project-wide IDs in an identities array of editor positions and IDs.
 These checks do not launch the game or validate a complete gameplay session.
 """;
 if (args.Length == 0)
@@ -57,7 +59,7 @@ try
         if (ended || argument.Length < 2 || !argument.StartsWith('-') || !char.IsLetter(argument[1]))
         { tokens.Add(argument); if (argument == "--") ended = true; continue; }
         if (argument[1] == 'h') { tokens.Add("--help"); continue; }
-        var option = argument[1] switch { 'g' => "game", 'c' => "center", 's' => "size", 'o' => "output", 'k' => "context", 'i' => args[0] == "export" ? "snapshot" : "source", _ => throw new ArgumentException("Unknown short option") };
+        var option = argument[1] switch { 'g' => "game", 'c' => "center", 's' => "size", 'o' => "output", 'k' => "context", 'i' => args[0] is "export" or "allocate" ? "snapshot" : "source", _ => throw new ArgumentException("Unknown short option") };
         tokens.Add("--" + option);
         if (argument.Length > 2) tokens.Add(argument[2..]);
     }
@@ -104,10 +106,13 @@ try
             }
         case "import":
         case "export":
+        case "allocate":
             {
                 var context = Required("context"); var input = Required(args[0] == "import" ? "source" : "snapshot"); var output = Required("output");
                 if (options.Count != 0) throw new ArgumentException("Unknown option");
-                if (args[0] == "import") Projects.Import(context, input, output); else Projects.Export(context, input, output);
+                if (args[0] == "import") Projects.Import(context, input, output);
+                else if (args[0] == "allocate") Projects.Allocate(context, input, output);
+                else Projects.Export(context, input, output);
                 break;
             }
         case "test":

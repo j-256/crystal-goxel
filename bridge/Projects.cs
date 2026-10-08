@@ -110,11 +110,14 @@ internal static class Projects
         }
         var replacement = new List<JsonObject>();
         var occupied = new HashSet<string>();
-        var biomes = File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(contextPath)!, "biomes.bin"));
-        var size = Ints(context["size"]!); var origin = Ints(context["origin"]!);
+        using var tiled = TiledContext.IsTiled(context) ? new TiledContext(contextPath, context) : null;
+        var biomes = tiled is null ? File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(contextPath)!, "biomes.bin")) : null;
+        var size = tiled is null ? Ints(context["size"]!) : null;
+        var origin = Ints(context["origin"]!);
+        var identities = Identities(snapshot, project);
         // Reserve entity IDs referenced by the editor tree too, including nodes inside folders
         var treeEntityIDs = project["Tree"] is JsonArray sourceTree ? TreeIDs(sourceTree) : [];
-        var next = (long)Math.Max(NativeGame.LastVanillaEntity, ids.Concat(treeEntityIDs).DefaultIfEmpty(0).Max()) + 1;
+        var next = (long)Math.Max(NativeGame.LastVanillaEntity, ids.Concat(treeEntityIDs).Concat(identities.Values).DefaultIfEmpty(0).Max()) + 1;
         foreach (var cell in snapshot["cells"]?.AsArray() ?? throw new InvalidDataException("Missing cells"))
         {
             var pos = Ints(cell!["pos"]!);
@@ -123,28 +126,92 @@ internal static class Projects
             if (!Inside(world, context) || !Block(context, type, variant)) throw new InvalidDataException("Authored cell is outside its context or has an unsupported block identity");
             var key = string.Join(',', world);
             if (!occupied.Add(key)) throw new InvalidDataException("Duplicate authored cell");
-            var local = world.Zip(origin, (w, o) => w - o).ToArray();
-            var biome = biomes[(local[0] * size[1] + local[1]) * size[2] + local[2]];
             JsonObject entity;
             if (managed.TryGetValue(key, out var previous)) entity = (JsonObject)previous.DeepClone();
             else
             {
-                if (next > int.MaxValue) throw new InvalidDataException("Entity IDs exhausted");
-                entity = NewEntity((int)next++, world, biome, solid);
+                var local = world.Zip(origin, (w, o) => w - o).ToArray();
+                var biome = tiled is not null ? tiled.Biome(world) :
+                    biomes![(local[0] * size![1] + local[1]) * size[2] + local[2]];
+                var assigned = identities.GetValueOrDefault(string.Join(',', pos));
+                if (assigned == 0 && next > int.MaxValue) throw new InvalidDataException("Entity IDs exhausted");
+                entity = NewEntity(assigned != 0 ? assigned : (int)next++, world, biome, solid);
             }
             var outfit = entity["NpcData"]!["Outfits"]![0]!;
-            outfit["VoxelID"] = type; outfit["VoxelVariantIndex"] = variant;
+            outfit["VoxelID"] = type;
+            if (outfit.AsObject().ContainsKey("VoxelVariantIndex") || variant != 0)
+                outfit["VoxelVariantIndex"] = variant;
             replacement.Add(entity);
         }
         var removed = managed.Values.Select(e => e["ID"]!.GetValue<int>()).ToHashSet();
-        for (var i = entities.Count - 1; i >= 0; i--) if (removed.Contains(entities[i]!["ID"]!.GetValue<int>())) entities.RemoveAt(i);
-        foreach (var entity in replacement) entities.Add(entity);
+        var byID = replacement.ToDictionary(e => e["ID"]!.GetValue<int>());
+        for (var i = entities.Count - 1; i >= 0; i--)
+        {
+            var id = entities[i]!["ID"]!.GetValue<int>();
+            if (!removed.Contains(id)) continue;
+            if (byID.TryGetValue(id, out var updated)) entities[i] = updated;
+            else entities.RemoveAt(i);
+        }
+        foreach (var entity in replacement)
+            if (!removed.Contains(entity["ID"]!.GetValue<int>())) entities.Add(entity);
         if (project["Tree"] is not JsonArray tree) project["Tree"] = tree = [];
         var retained = replacement.Select(e => e["ID"]!.GetValue<int>()).ToHashSet();
         PruneTree(tree, removed.Except(retained).ToHashSet());
         // Crystal Edit's world entities live outside its model tree; existing tree metadata stays intact
         WriteNew(output, project);
         Console.WriteLine(JsonSerializer.Serialize(new { authored = replacement.Count, entities = entities.Count, output = Path.GetFullPath(output) }));
+    }
+
+    private static Dictionary<string, int> Identities(JsonObject snapshot, JsonObject project)
+    {
+        var result = new Dictionary<string, int>();
+        var reserved = project["Entities"]!.AsArray().Select(e => e!["ID"]!.GetValue<int>()).ToHashSet();
+        if (project["Tree"] is JsonArray tree) reserved.UnionWith(TreeIDs(tree));
+        foreach (var entry in snapshot["identities"]?.AsArray() ?? [])
+        {
+            var id = entry!["id"]!.GetValue<int>();
+            var pos = Ints(entry["pos"]!);
+            if (id <= NativeGame.LastVanillaEntity || !reserved.Add(id) ||
+                !result.TryAdd(string.Join(',', pos), id))
+                throw new InvalidDataException("Assigned entity identity conflicts with the source project");
+        }
+        return result;
+    }
+
+    internal static void Allocate(string contextPath, string input, string output)
+    {
+        var context = Read(contextPath);
+        ValidateContext(contextPath, context);
+        var snapshot = Read(input);
+        if (snapshot["format"]?.GetValue<int>() != 1) throw new InvalidDataException("Unsupported snapshot format");
+        var source = snapshot["source"]?.GetValue<string>();
+        var project = string.IsNullOrEmpty(source) ? NewProject() : Parse(source);
+        ValidateProject(project);
+        if (string.IsNullOrEmpty(source)) snapshot["source"] = project.ToJsonString();
+        var assigned = Identities(snapshot, project);
+        var managed = (snapshot["managed"]?.AsArray() ?? []).Select(e =>
+            string.Join(',', Context.ToEditor(Ints(e!["world"]!), Ints(context["origin"]!)))).ToHashSet();
+        var reserved = project["Entities"]!.AsArray().Select(e => e!["ID"]!.GetValue<int>());
+        if (project["Tree"] is JsonArray tree) reserved = reserved.Concat(TreeIDs(tree));
+        var next = (long)Math.Max(NativeGame.LastVanillaEntity, reserved.Concat(assigned.Values).DefaultIfEmpty(0).Max()) + 1;
+        foreach (var cell in snapshot["cells"]?.AsArray() ?? throw new InvalidDataException("Missing cells"))
+        {
+            var pos = Ints(cell!["pos"]!);
+            if (!Inside(Context.ToWorld(pos, Ints(context["origin"]!)), context) ||
+                !Block(context, cell["type"]!.GetValue<int>(), cell["variant"]!.GetValue<int>()))
+                throw new InvalidDataException("Authored cell has unsupported coordinates or identity");
+            var key = string.Join(',', pos);
+            if (managed.Contains(key) || assigned.ContainsKey(key)) continue;
+            if (next > int.MaxValue) throw new InvalidDataException("Entity IDs exhausted");
+            assigned.Add(key, (int)next++);
+        }
+        // Retain unused allocations so deletion, undo and later exports cannot reuse another cell's ID
+        snapshot["identities"] = new JsonArray(assigned.Select(e => (JsonNode)new JsonObject
+        {
+            ["pos"] = JsonSerializer.SerializeToNode(Context.Triple(e.Key)), ["id"] = e.Value
+        }).ToArray());
+        WriteNew(output, snapshot);
+        Console.WriteLine(JsonSerializer.Serialize(new { identities = assigned.Count }));
     }
 
     private static IEnumerable<int> TreeIDs(JsonArray tree)
@@ -189,6 +256,7 @@ internal static class Projects
 
     private static bool Inside(int[] world, JsonObject context)
     {
+        if (TiledContext.IsTiled(context)) return TiledContext.Inside(world);
         var origin = Ints(context["origin"]!); var size = Ints(context["size"]!);
         return Enumerable.Range(0, 3).All(i => world[i] >= origin[i] && world[i] < origin[i] + size[i]);
     }

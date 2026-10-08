@@ -17,6 +17,7 @@ internal sealed class TiledContext : IDisposable
     private readonly JsonObject manifest;
     private NativeGame? game;
     private NativeWorld? world;
+    private readonly Dictionary<string, byte[]> biomeCache = [];
 
     internal TiledContext(string path, JsonObject context)
     {
@@ -190,10 +191,15 @@ internal sealed class TiledContext : IDisposable
     {
         if (!Inside(point)) throw new InvalidDataException("Authored cell exceeds supported world bounds");
         var key = Key(point);
-        Ensure(key);
+        var name = string.Join(',', key);
+        if (!biomeCache.TryGetValue(name, out var bytes))
+        {
+            Ensure(key);
+            bytes = File.ReadAllBytes(Path.Combine(TileDirectory(key), "biomes.bin"));
+            biomeCache[name] = bytes;
+        }
         var local = point.Zip(key, (v, k) => v - k * TileSize).ToArray();
-        return File.ReadAllBytes(Path.Combine(TileDirectory(key), "biomes.bin"))[
-            (local[0] * TileSize + local[1]) * TileSize + local[2]];
+        return bytes[(local[0] * TileSize + local[1]) * TileSize + local[2]];
     }
 
     public void Dispose() => game?.Dispose();
