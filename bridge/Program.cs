@@ -10,6 +10,7 @@ Offline Crystal Project native world context and Crystal Edit project bridge
   world   --game DIR --output NEW_DIR
   view    --context world.json --center X,Y,Z --output NEW_VIEW.json
   tiles   --context world.json --min X,Y,Z --max X,Y,Z --output NEW_VIEW.json
+  prefetch --context world.json --min X,Y,Z --max X,Y,Z --output NEW_VIEW.json
   import  --context context.json --source PROJECT.json --output snapshot.json
   export  --context context.json --snapshot snapshot.json --output NEW_PROJECT.json
   allocate --context CONTEXT.json --snapshot snapshot.json --output NEW_SNAPSHOT.json
@@ -25,6 +26,7 @@ Tile bounds are game coordinates, with an inclusive minimum and exclusive maximu
 World caches use format 2, native-aligned 16-cell tiles and shared fingerprinted assets.
 view prepares an 80-cell cube around a location, clipped at world edges.
 tiles prepares up to 125 tiles per request.
+prefetch prepares up to 343 tiles without changing an authored document.
 No environment variables are required. Native operations need the supported game;
 synthetic tests and validation of existing cache files do not need it.
 Exit status: 0 success, 1 runtime failure, 2 usage/precondition, 3 missing dependency
@@ -85,6 +87,7 @@ try
             }
         case "view":
         case "tiles":
+        case "prefetch":
             {
                 var path = Required("context"); var output = Required("output");
                 int[] min, max;
@@ -96,7 +99,7 @@ try
                 }
                 if (options.Count != 0) throw new ArgumentException("Unknown option");
                 using var context = new TiledContext(path, Projects.Read(path));
-                context.Prepare(min, max, output); break;
+                context.Prepare(min, max, output, args[0] == "prefetch"); break;
             }
         case "prepare":
             {

@@ -73,6 +73,12 @@ internal static class TileTests
         try { TiledContext.Keys([0, 0, 0], [200, 200, 200]); }
         catch (InvalidDataException) { rejected = true; }
         Require(rejected, "large requests are bounded before cache work");
+        Require(TiledContext.Keys([-48, 48, -48], [64, 160, 64], true).Count ==
+            TiledContext.MaxPrefetchTiles, "prefetch allows a ring beyond the visible view");
+        rejected = false;
+        try { TiledContext.Keys([0, 0, 0], [128, 128, 128], true); }
+        catch (InvalidDataException) { rejected = true; }
+        Require(rejected, "prefetch remains bounded independently of the visible view");
         var root = Path.Combine(directory, "tiles-contract");
         var context = Fixture(root);
         FixtureTile(root, context, [-1, 0, 0], 3);
@@ -83,9 +89,13 @@ internal static class TileTests
         var output = Path.Combine(root, "view.json");
         tiled.Prepare([-1, 5, 0], [1, 6, 1], output);
         Require(Projects.Read(output)["tiles"]!.AsArray().Count == 2, "view publishes both validated tiles");
+        var prefetch = Path.Combine(root, "prefetch.json");
+        tiled.Prepare([-1, 5, 0], [1, 6, 1], prefetch, true);
+        Require(Projects.Read(prefetch)["tiles"]!.AsArray().Count == 2,
+            "prefetch reuses fingerprinted tiles without an installation");
         var incomplete = Path.Combine(root, "incomplete.json");
         rejected = false;
-        try { tiled.Prepare([-1, 5, 0], [17, 6, 1], incomplete); }
+        try { tiled.Prepare([-1, 5, 0], [17, 6, 1], incomplete, true); }
         catch (IOException) { rejected = true; }
         Require(rejected && !File.Exists(incomplete), "missing tile never publishes a partial view");
         File.AppendAllText(Path.Combine(root, "tiles", "-1,0,0", "reference.mesh"), "tamper");
@@ -93,6 +103,11 @@ internal static class TileTests
         try { tiled.ReadTile([-1, 0, 0]); }
         catch (InvalidDataException) { rejected = true; }
         Require(rejected, "corrupt tile remains an explicit failure");
+        rejected = false;
+        try { tiled.Prepare([-1, 5, 0], [1, 6, 1], incomplete, true); }
+        catch (InvalidDataException) { rejected = true; }
+        Require(rejected && !File.Exists(incomplete),
+            "prefetch corruption never publishes an incomplete result");
         SeamGeometry(directory);
     }
 

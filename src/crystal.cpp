@@ -16,12 +16,14 @@ extern "C" {
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #ifndef WIN32
 #include <sys/wait.h>
@@ -36,6 +38,11 @@ constexpr size_t MAX_PREVIEW_VERTICES = 4'000'000;
 constexpr int NATIVE_TILE_EDGE = 16;
 constexpr int MAX_VIEW_TILES = 125;
 constexpr int VIEW_TILE_RADIUS = 2;
+constexpr int PREFETCH_TILE_RADIUS = VIEW_TILE_RADIUS + 1;
+constexpr int MAX_PREFETCH_TILES = 343;
+constexpr size_t MAX_CACHED_BYTES = 64 * 1024 * 1024;
+constexpr size_t MAX_CACHED_TILES = 1024;
+constexpr int CAMERA_EDGE_MARGIN = NATIVE_TILE_EDGE;
 constexpr int WORLD_EXTENT = 10000;
 constexpr int WORLD_HEIGHT = 256;
 constexpr unsigned MAX_BOOKMARKS = 64;
@@ -49,12 +56,57 @@ struct Block {
     int id, max_variant;
     std::string name;
 };
+struct FileStamp {
+    uintmax_t size;
+    std::filesystem::file_time_type time;
+    bool operator==(const FileStamp &other) const
+    {
+        return size == other.size && time == other.time;
+    }
+};
+struct TerrainTile {
+    std::filesystem::path directory;
+    std::array<int, 3> key;
+    std::array<FileStamp, 4> stamps;
+    std::vector<model_vertex_t> mesh;
+    std::vector<std::array<int, 3>> owners;
+    uint64_t used = 0;
+    size_t bytes() const
+    {
+        return sizeof(*this) + directory.native().size() +
+               mesh.capacity() * sizeof(model_vertex_t) +
+               owners.capacity() * sizeof(std::array<int, 3>);
+    }
+};
+using Tile = std::shared_ptr<TerrainTile>;
+using TileCache = std::map<std::array<int, 3>, Tile>;
+struct PreparedTerrain {
+    std::array<int, 3> min, max;
+    TileCache tiles;
+    bool from_memory = false;
+};
+struct TerrainJob {
+    std::string path;
+    std::array<int, 3> center;
+    uint64_t revision, document;
+    bool prefetch;
+    std::chrono::steady_clock::time_point started;
+    std::future<PreparedTerrain> result;
+};
+uint64_t next_document = 0;
 struct State {
+    uint64_t document = ++next_document;
     std::string path, manifest, source, managed = "[]";
     std::string identities = "[]", bookmarks = "[]";
     std::array<int, 3> origin{}, size{};
     std::array<int, 3> center{ 1, 99, 1 }, view_min{}, view_max{};
     std::set<std::array<int, 3>> tiles;
+    TileCache cache;
+    size_t cache_bytes = 0;
+    uint64_t cache_clock = 0, view_revision = 0;
+    size_t memory_views = 0;
+    bool prefetch_attempted = false;
+    std::string prefetch_error;
     bool tiled = false;
     bool follow_view = true;
     std::vector<Block> blocks;
@@ -79,6 +131,9 @@ struct State {
     }
 };
 std::unique_ptr<State> state;
+// Workers only prepare private cache files and CPU data; GL publication stays
+// on the editor thread, and reset/context changes invalidate their results
+std::unique_ptr<TerrainJob> terrain_job;
 std::string helper, status, pending;
 uint32_t pending_key = 0;
 char context_input[4096] = {};
@@ -244,19 +299,20 @@ Json helper_report(const std::string &output)
     return parse(output.substr(0, output.find('\n')));
 }
 
-std::string run_helper(const std::vector<std::string> &arguments)
+std::string run_helper(const std::vector<std::string> &arguments,
+                       const std::string &executable = helper)
 {
 #ifdef WIN32
     throw std::runtime_error(
             "This prototype's helper launcher requires macOS or Linux");
 #else
-    if (helper.empty())
+    if (executable.empty())
         throw std::runtime_error(
                 "Set --crystal-helper to the crystal-bridge executable");
     int output[2];
     if (pipe(output))
         throw std::runtime_error("Cannot open the helper output pipe");
-    std::vector<char *> argv{ const_cast<char *>(helper.c_str()) };
+    std::vector<char *> argv{ const_cast<char *>(executable.c_str()) };
     for (const auto &arg : arguments)
         argv.push_back(const_cast<char *>(arg.c_str()));
     argv.push_back(nullptr);
@@ -266,7 +322,7 @@ std::string run_helper(const std::vector<std::string> &arguments)
         dup2(output[1], STDOUT_FILENO);
         dup2(output[1], STDERR_FILENO);
         close(output[1]);
-        execv(helper.c_str(), argv.data());
+        execv(executable.c_str(), argv.data());
         _exit(127);
     }
     close(output[1]);
@@ -446,75 +502,216 @@ void reference_geometry(const std::filesystem::path &directory,
     }
 }
 
-void prepare_view(State &saved, const std::array<int, 3> &min,
-                  const std::array<int, 3> &max)
+std::array<FileStamp, 4> tile_stamps(const std::filesystem::path &path)
 {
-    Temporary temp;
-    auto path = temp.directory / "view.json";
-    run_helper({ "tiles", "--context", saved.path, "--min", triple(min),
-                 "--max", triple(max), "--output", path.string() });
+    std::array<FileStamp, 4> result;
+    const char *names[] = { "tile.json", "reference.mesh", "reference.cells",
+                            "biomes.bin" };
+    for (int i = 0; i < 4; i++) {
+        auto file = path / names[i];
+        result[i] = { std::filesystem::file_size(file),
+                      std::filesystem::last_write_time(file) };
+    }
+    return result;
+}
+
+bool tile_unchanged(const Tile &tile)
+{
+    try { return tile->stamps == tile_stamps(tile->directory); }
+    catch (const std::exception &) { return false; }
+}
+
+TileCache reusable_tiles(State &saved)
+{
+    TileCache result;
+    for (auto it = saved.cache.begin(); it != saved.cache.end();) {
+        // File metadata only invalidates cached data; the helper remains the
+        // fingerprint authority whenever a tile is first read or changed
+        if (!tile_unchanged(it->second)) {
+            saved.cache_bytes -= it->second->bytes();
+            it = saved.cache.erase(it);
+        } else {
+            result.insert(*it);
+            ++it;
+        }
+    }
+    return result;
+}
+
+PreparedTerrain read_prepared(const std::string &path,
+                              const std::array<int, 3> &min,
+                              const std::array<int, 3> &max,
+                              const TileCache &cache, bool prefetch)
+{
     auto view = parse(read_file(path, MAX_STATE));
     const auto &tiles = (*view)["tiles"];
+    auto limit = prefetch ? MAX_PREFETCH_TILES : MAX_VIEW_TILES;
     if (tiles.type != json_array || tiles.u.array.length == 0 ||
-        tiles.u.array.length > MAX_VIEW_TILES)
+        tiles.u.array.length > unsigned(limit))
         throw std::runtime_error("Invalid prepared tile view");
-    std::vector<model_vertex_t> mesh;
-    std::vector<std::array<int, 3>> owners;
+    PreparedTerrain result{ min, max, {} };
+    size_t bytes = 0;
     std::set<std::array<int, 3>> ready;
-    std::array<int, 3> first = min, last = max;
-    for (int k = 0; k < 3; k++) {
-        first[k] = tile_index(min[k]) * NATIVE_TILE_EDGE;
-        last[k] = (tile_index(max[k] - 1) + 1) * NATIVE_TILE_EDGE;
-    }
     for (unsigned i = 0; i < tiles.u.array.length; i++) {
-        const auto &tile = tiles[i];
-        auto origin = triple(tile["origin"]);
+        const auto &entry = tiles[i];
+        auto origin = triple(entry["origin"]);
         std::array<int, 3> key;
         for (int k = 0; k < 3; k++) {
-            if (origin[k] % NATIVE_TILE_EDGE || origin[k] < first[k] ||
-                origin[k] >= last[k])
+            if (origin[k] % NATIVE_TILE_EDGE ||
+                tile_index(origin[k]) < tile_index(min[k]) ||
+                tile_index(origin[k]) > tile_index(max[k] - 1))
                 throw std::runtime_error("Prepared tile is outside the view");
             key[k] = tile_index(origin[k]);
         }
         if (!ready.insert(key).second)
             throw std::runtime_error("Duplicate prepared terrain tile");
-        reference_geometry(string(tile["path"]), origin,
-                           { NATIVE_TILE_EDGE, NATIVE_TILE_EDGE,
-                             NATIVE_TILE_EDGE }, true,
-                           mesh, owners);
+        // Speculative CPU data is bounded even when native geometry is dense
+        if (prefetch && bytes >= MAX_CACHED_BYTES) continue;
+        auto found = cache.find(key);
+        Tile tile;
+        if (found != cache.end() && tile_unchanged(found->second))
+            tile = found->second;
+        else {
+            tile = std::make_shared<TerrainTile>();
+            tile->key = key;
+            tile->directory = string(entry["path"]);
+            tile->stamps = tile_stamps(tile->directory);
+            reference_geometry(tile->directory, origin,
+                               { NATIVE_TILE_EDGE, NATIVE_TILE_EDGE,
+                                 NATIVE_TILE_EDGE }, true,
+                               tile->mesh, tile->owners);
+            if (!tile_unchanged(tile))
+                throw std::runtime_error("Terrain tile changed while reading");
+        }
+        if (prefetch && tile->bytes() > MAX_CACHED_BYTES - bytes) continue;
+        bytes += tile->bytes();
+        result.tiles.emplace(key, std::move(tile));
     }
     size_t expected = 1;
     for (int k = 0; k < 3; k++)
-        expected *= size_t((last[k] - first[k]) / NATIVE_TILE_EDGE);
+        expected *= size_t(tile_index(max[k] - 1) - tile_index(min[k]) + 1);
     if (ready.size() != expected)
         throw std::runtime_error("Prepared view is missing a terrain tile");
+    return result;
+}
+
+PreparedTerrain prepare_terrain(const std::string &context,
+                                const std::string &executable,
+                                const std::array<int, 3> &min,
+                                const std::array<int, 3> &max,
+                                const TileCache &cache, bool prefetch)
+{
+    PreparedTerrain ready{ min, max, {} };
+    bool complete = true;
+    for (int x = tile_index(min[0]); x <= tile_index(max[0] - 1); x++)
+        for (int y = tile_index(min[1]); y <= tile_index(max[1] - 1); y++)
+            for (int z = tile_index(min[2]); z <= tile_index(max[2] - 1); z++) {
+                auto found = cache.find({ x, y, z });
+                if (found == cache.end() || !tile_unchanged(found->second))
+                    complete = false;
+                else ready.tiles.insert(*found);
+            }
+    if (complete) {
+        ready.from_memory = true;
+        return ready;
+    }
+    Temporary temp;
+    auto path = temp.directory / "view.json";
+    run_helper({ prefetch ? "prefetch" : "tiles", "--context", context,
+                 "--min", triple(min), "--max", triple(max),
+                 "--output", path.string() }, executable);
+    return read_prepared(path.string(), min, max, cache, prefetch);
+}
+
+void trim_terrain_cache(State &saved, size_t byte_limit, size_t tile_limit)
+{
+    while (saved.cache_bytes > byte_limit || saved.cache.size() > tile_limit) {
+        auto oldest = std::min_element(saved.cache.begin(), saved.cache.end(),
+                [](const auto &a, const auto &b) {
+                    return a.second->used < b.second->used;
+                });
+        saved.cache_bytes -= oldest->second->bytes();
+        saved.cache.erase(oldest);
+    }
+}
+
+void cache_terrain(State &saved, const PreparedTerrain &prepared)
+{
+    for (const auto &entry : prepared.tiles) {
+        auto found = saved.cache.find(entry.first);
+        if (found != saved.cache.end())
+            saved.cache_bytes -= found->second->bytes();
+        entry.second->used = ++saved.cache_clock;
+        saved.cache[entry.first] = entry.second;
+        saved.cache_bytes += entry.second->bytes();
+    }
+    trim_terrain_cache(saved, MAX_CACHED_BYTES, MAX_CACHED_TILES);
+}
+
+void publish_terrain(State &saved, const PreparedTerrain &prepared)
+{
+    std::vector<model_vertex_t> mesh;
+    std::vector<std::array<int, 3>> owners;
+    std::set<std::array<int, 3>> ready;
+    for (const auto &entry : prepared.tiles) {
+        if (!tile_unchanged(entry.second))
+            throw std::runtime_error("Terrain tile changed before publication");
+        if (mesh.size() + entry.second->mesh.size() > MAX_PREVIEW_VERTICES)
+            throw std::runtime_error("Reference mesh exceeds its view limit");
+        mesh.insert(mesh.end(), entry.second->mesh.begin(),
+                    entry.second->mesh.end());
+        owners.insert(owners.end(), entry.second->owners.begin(),
+                      entry.second->owners.end());
+        ready.insert(entry.first);
+    }
     auto reference = model(mesh);
+    cache_terrain(saved, prepared);
     // Geometry, picking ownership and loaded bounds are published together
     saved.reference = std::move(reference);
     saved.reference_cells = std::move(owners);
     saved.tiles = std::move(ready);
-    saved.view_min = first;
-    saved.view_max = last;
-    for (int k = 0; k < 3; k++) saved.size[k] = last[k] - first[k];
+    for (int k = 0; k < 3; k++) {
+        saved.view_min[k] = tile_index(prepared.min[k]) * NATIVE_TILE_EDGE;
+        saved.view_max[k] = (tile_index(prepared.max[k] - 1) + 1) *
+                           NATIVE_TILE_EDGE;
+        saved.size[k] = saved.view_max[k] - saved.view_min[k];
+    }
+    saved.view_revision++;
+    if (prepared.from_memory) saved.memory_views++;
+    saved.prefetch_attempted = false;
+    saved.prefetch_error.clear();
     saved.authored.reset();
     saved.picking.reset();
 }
 
-void location_view(State &saved, const std::array<int, 3> &center)
+void prepare_view(State &saved, const std::array<int, 3> &min,
+                  const std::array<int, 3> &max)
+{
+    auto cache = reusable_tiles(saved);
+    auto prepared = prepare_terrain(saved.path, helper, min, max, cache, false);
+    if (prepared.tiles.size() > MAX_VIEW_TILES)
+        throw std::runtime_error("Prepared view exceeds its tile limit");
+    publish_terrain(saved, prepared);
+}
+
+void location_bounds(const std::array<int, 3> &center, int radius,
+                     std::array<int, 3> &min, std::array<int, 3> &max)
 {
     check_location(center);
-    std::array<int, 3> min, max;
     for (int k = 0; k < 3; k++) {
-        min[k] = (tile_index(center[k]) - VIEW_TILE_RADIUS) * NATIVE_TILE_EDGE;
-        max[k] = (tile_index(center[k]) + VIEW_TILE_RADIUS + 1) *
-                 NATIVE_TILE_EDGE;
+        min[k] = (tile_index(center[k]) - radius) * NATIVE_TILE_EDGE;
+        max[k] = (tile_index(center[k]) + radius + 1) * NATIVE_TILE_EDGE;
+        auto lower = k == 1 ? 0 : -WORLD_EXTENT;
+        auto upper = k == 1 ? WORLD_HEIGHT : WORLD_EXTENT + 1;
+        min[k] = std::max(min[k], lower);
+        max[k] = std::min(max[k], upper);
     }
-    min[0] = std::max(min[0], -WORLD_EXTENT);
-    max[0] = std::min(max[0], WORLD_EXTENT + 1);
-    min[1] = std::max(min[1], 0);
-    max[1] = std::min(max[1], WORLD_HEIGHT);
-    min[2] = std::max(min[2], -WORLD_EXTENT);
-    max[2] = std::min(max[2], WORLD_EXTENT + 1);
+}
+
+void location_view(State &saved, const std::array<int, 3> &center)
+{
+    std::array<int, 3> min, max;
+    location_bounds(center, VIEW_TILE_RADIUS, min, max);
     prepare_view(saved, min, max);
     saved.center = center;
 }
@@ -881,7 +1078,8 @@ extern "C" void crystal_reset(void)
     failed_tile_request.clear();
 }
 
-extern "C" bool crystal_prepare_edit(const float box[4][4])
+namespace {
+bool prepare_area(const float box[4][4], bool edit)
 {
     if (!state || !state->tiled || box_is_null(box)) return true;
     std::string request;
@@ -909,7 +1107,6 @@ extern "C" bool crystal_prepare_edit(const float box[4][4])
             min[2] < -WORLD_EXTENT || max[2] > WORLD_EXTENT + 1)
             throw std::runtime_error("Edit exceeds supported world bounds");
         request = triple(min) + ":" + triple(max);
-        if (request == failed_tile_request) return false;
         bool ready = true;
         size_t count = 1;
         for (int k = 0; k < 3; k++)
@@ -922,6 +1119,9 @@ extern "C" bool crystal_prepare_edit(const float box[4][4])
                 for (int z = tile_index(min[2]);
                      z <= tile_index(max[2] - 1); z++)
                     ready &= state->tiles.count({ x, y, z }) != 0;
+        // Hover cannot replace the reference view or start foreground loading
+        if (!edit) return ready;
+        if (request == failed_tile_request) return false;
         if (ready) return true;
         auto expanded_min = min, expanded_max = max;
         count = 1;
@@ -944,15 +1144,167 @@ extern "C" bool crystal_prepare_edit(const float box[4][4])
         return true;
     }
     catch (const std::exception &error) {
+        if (!edit) return false;
         failed_tile_request = request;
         status = "Edit cancelled: " + std::string(error.what());
         return false;
     }
 }
+} // namespace
+
+extern "C" bool crystal_prepare_edit(const float box[4][4])
+{
+    return prepare_area(box, true);
+}
+
+extern "C" bool crystal_prepare_preview(const float box[4][4])
+{
+    return prepare_area(box, false);
+}
+
+namespace {
+bool camera_needs_view(const std::array<int, 3> &center);
+
+void start_terrain_job(const std::array<int, 3> &center, bool prefetch)
+{
+    auto job = std::make_unique<TerrainJob>();
+    job->path = state->path;
+    job->center = center;
+    job->revision = state->view_revision;
+    job->document = state->document;
+    job->prefetch = prefetch;
+    job->started = std::chrono::steady_clock::now();
+    std::array<int, 3> min, max;
+    if (prefetch) {
+        // Center speculation on the visible bounds even after a narrow edit
+        for (int k = 0; k < 3; k++)
+            job->center[k] = std::clamp(
+                    (state->view_min[k] + state->view_max[k]) / 2,
+                    k == 1 ? 0 : -WORLD_EXTENT,
+                    k == 1 ? WORLD_HEIGHT - 1 : WORLD_EXTENT);
+        location_bounds(job->center, PREFETCH_TILE_RADIUS, min, max);
+    } else location_bounds(center, VIEW_TILE_RADIUS, min, max);
+    auto cache = reusable_tiles(*state);
+    auto context = state->path, executable = helper;
+    job->result = std::async(std::launch::async,
+            [context, executable, min, max, cache, prefetch] {
+                return prepare_terrain(context, executable, min, max,
+                                       cache, prefetch);
+            });
+    terrain_job = std::move(job);
+    if (prefetch) {
+        state->prefetch_attempted = true;
+        state->prefetch_error.clear();
+    } else status = "Loading terrain. The current view remains available.";
+}
+
+void poll_terrain_job(const std::array<int, 3> *camera_center = nullptr)
+{
+    if (!terrain_job || terrain_job->result.wait_for(
+            std::chrono::milliseconds(0)) != std::future_status::ready) return;
+    auto job = std::move(terrain_job);
+    bool relevant = state && state->document == job->document &&
+                    state->path == job->path;
+    double elapsed = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - job->started).count();
+    auto discard = [&](const char *reason) {
+        fprintf(stderr, "crystal-goxel terrain-job: operation=%s "
+                "result=discarded document=%llu revision=%llu "
+                "elapsedMs=%.2f reason=%s\n",
+                job->prefetch ? "prefetch" : "navigation",
+                (unsigned long long)job->document,
+                (unsigned long long)job->revision, elapsed, reason);
+    };
+    try {
+        auto prepared = job->result.get();
+        if (!relevant) { discard("document-changed"); return; }
+        if (job->prefetch) {
+            // Speculation cannot replace the visible view or authored state
+            for (const auto &entry : prepared.tiles)
+                if (!tile_unchanged(entry.second))
+                    throw std::runtime_error(
+                            "Nearby tile changed before publication");
+            cache_terrain(*state, prepared);
+        } else if (state->view_revision == job->revision) {
+            if (!state->follow_view ||
+                (camera_center && !camera_needs_view(*camera_center))) {
+                discard("camera-returned-or-follow-disabled");
+                status = "Current area ready.";
+                return;
+            }
+            if (camera_center) {
+                for (int k = 0; k < 3; k++)
+                    if ((*camera_center)[k] < prepared.min[k] ||
+                        (*camera_center)[k] >= prepared.max[k]) {
+                        discard("camera-moved-beyond-request");
+                        return;
+                    }
+            }
+            publish_terrain(*state, prepared);
+            state->center = job->center;
+            update_metadata_key(*state);
+            std::copy(job->center.begin(), job->center.end(), location_input);
+            volume_delete(goxel.tool_volume);
+            goxel.tool_volume = nullptr;
+            failed_tile_request.clear();
+            status = "Location loaded. Edits at other locations remain in "
+                     "this mod.";
+        } else { discard("view-changed"); return; }
+        fprintf(stderr, "crystal-goxel terrain-job: operation=%s result=ok "
+                "document=%llu revision=%llu location=%s tiles=%zu "
+                "cache=%s cachedTiles=%zu cachedBytes=%zu elapsedMs=%.2f\n",
+                job->prefetch ? "prefetch" : "navigation",
+                (unsigned long long)job->document,
+                (unsigned long long)job->revision,
+                triple(job->center).c_str(), prepared.tiles.size(),
+                prepared.from_memory ? "memory" : "disk",
+                state->cache.size(), state->cache_bytes, elapsed);
+    }
+    catch (const std::exception &error) {
+        if (!relevant) { discard("document-changed"); return; }
+        if (job->prefetch) {
+            state->prefetch_error = "Nearby terrain unavailable: " +
+                                    std::string(error.what());
+        } else if (state->view_revision == job->revision) {
+            if (!state->follow_view) {
+                discard("follow-disabled");
+                status = "Current area ready.";
+                return;
+            }
+            std::array<int, 3> key;
+            for (int k = 0; k < 3; k++) key[k] = tile_index(job->center[k]);
+            failed_tile_request = "camera:" + triple(key);
+            status = "Terrain loading failed: " + std::string(error.what());
+        } else { discard("view-changed"); return; }
+        fprintf(stderr, "crystal-goxel terrain-job: operation=%s result=error "
+                "document=%llu revision=%llu location=%s elapsedMs=%.2f "
+                "message=%s\n", job->prefetch ? "prefetch" : "navigation",
+                (unsigned long long)job->document,
+                (unsigned long long)job->revision,
+                triple(job->center).c_str(), elapsed, error.what());
+    }
+}
+
+bool camera_needs_view(const std::array<int, 3> &center)
+{
+    for (int k = 0; k < 3; k++) {
+        auto lower = k == 1 ? 0 : -WORLD_EXTENT;
+        auto upper = k == 1 ? WORLD_HEIGHT : WORLD_EXTENT + 1;
+        if ((state->view_min[k] > lower &&
+             center[k] < state->view_min[k] + CAMERA_EDGE_MARGIN) ||
+            (state->view_max[k] < upper &&
+             center[k] >= state->view_max[k] - CAMERA_EDGE_MARGIN)) return true;
+    }
+    return false;
+}
+} // namespace
 
 extern "C" void crystal_follow_view(const camera_t *camera)
 {
-    if (!state || !state->tiled || !state->follow_view) return;
+    if (!state || !state->tiled || !state->follow_view) {
+        poll_terrain_job();
+        return;
+    }
     float target[3];
     mat4_mul_vec3(camera->mat, VEC(0, 0, -camera->dist), target);
     for (float value : target)
@@ -962,15 +1314,17 @@ extern "C" void crystal_follow_view(const camera_t *camera)
         std::clamp(int(std::floor(target[2])), 0, WORLD_HEIGHT - 1),
         int(std::floor(-target[1]))
     };
-    bool changed = false;
-    for (int k = 0; k < 3; k++)
-        changed |= tile_index(center[k]) != tile_index(state->center[k]);
-    auto request = "camera:" + triple(center);
-    if (!changed || request == failed_tile_request) return;
+    poll_terrain_job(&center);
+    if (terrain_job) return;
+    std::array<int, 3> key;
+    for (int k = 0; k < 3; k++) key[k] = tile_index(center[k]);
+    auto request = "camera:" + triple(key);
     try {
-        visit_location(center, false);
-        volume_delete(goxel.tool_volume);
-        goxel.tool_volume = nullptr;
+        if (camera_needs_view(center)) {
+            if (request != failed_tile_request)
+                start_terrain_job(center, false);
+        } else if (!state->prefetch_attempted)
+            start_terrain_job(state->center, true);
     }
     catch (const std::exception &error) {
         failed_tile_request = request;
@@ -1202,15 +1556,22 @@ extern "C" void crystal_panel(void)
                 if (gui_button("Go to location", 0, 0))
                     visit_location({ location_input[0], location_input[1],
                                      location_input[2] }, true);
-                gui_text("Loaded terrain tiles: %zu", state->tiles.size());
+                gui_text("Visible terrain tiles: %zu", state->tiles.size());
                 gui_text_wrapped("View: %d x %d x %d blocks", state->size[0],
                                  state->size[1], state->size[2]);
+                gui_text("Ready terrain tiles: %zu", state->cache.size());
+                if (terrain_job && terrain_job->document == state->document)
+                    gui_text(terrain_job->prefetch ? "Preparing nearby terrain"
+                                                   : "Loading camera area");
+                if (!state->prefetch_error.empty())
+                    gui_text_wrapped("%s", state->prefetch_error.c_str());
                 gui_checkbox("Follow camera", &state->follow_view,
                              "Prepare terrain when the camera moves");
                 gui_text_wrapped("All locations share this mod. Brushes and "
                                  "shapes prepare terrain before editing.");
                 if (gui_button("Retry terrain loading", 0, 0)) {
                     failed_tile_request.clear();
+                    state->prefetch_error.clear();
                     visit_location(state->center, false);
                 }
                 if (gui_section_begin("Saved locations",
@@ -1364,6 +1725,39 @@ extern "C" void crystal_restore_state(const char *data, size_t size)
 }
 
 namespace {
+void wait_terrain_job()
+{
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::seconds(30);
+    while (terrain_job) {
+        poll_terrain_job();
+        if (std::chrono::steady_clock::now() > deadline)
+            throw std::runtime_error("Terrain smoke job exceeded its deadline");
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+
+void cache_eviction_smoke()
+{
+    State saved;
+    PreparedTerrain data{};
+    for (int i = 0; i < 3; i++) {
+        auto tile = std::make_shared<TerrainTile>();
+        tile->key = { i, 0, 0 };
+        data.tiles[tile->key] = tile;
+    }
+    cache_terrain(saved, data);
+    auto newest = data.tiles.at({ 2, 0, 0 });
+    trim_terrain_cache(saved, newest->bytes() * 2, MAX_CACHED_TILES);
+    if (saved.cache.size() != 2 || saved.cache.count({ 0, 0, 0 }))
+        throw std::runtime_error("Terrain cache did not evict the oldest data");
+    trim_terrain_cache(saved, MAX_CACHED_BYTES, 1);
+    if (saved.cache.size() != 1 || !saved.cache.count({ 2, 0, 0 }) ||
+        saved.cache_bytes != newest->bytes())
+        throw std::runtime_error(
+                "Terrain cache count or byte accounting failed");
+}
+
 void benchmark_views()
 {
     constexpr int BASELINE_RADIUS = 1;
@@ -1420,6 +1814,8 @@ void benchmark_views()
 void world_smoke(const char *output)
 {
     if (!state->tiled) return;
+    wait_terrain_job();
+    cache_eviction_smoke();
     state->follow_view = false;
     if (state->size != std::array<int, 3>{ 80, 80, 80 } ||
         state->tiles.size() != MAX_VIEW_TILES)
@@ -1572,13 +1968,84 @@ void world_smoke(const char *output)
     mat4_itranslate(camera->mat, 1.5f, -1.5f, 99.5f + camera->dist);
     float navigation[4][4];
     mat4_copy(camera->mat, navigation);
+    auto reference_before = state->reference.get();
     crystal_follow_view(camera);
+    if (!terrain_job || terrain_job->prefetch ||
+        state->reference.get() != reference_before)
+        throw std::runtime_error(
+                "Navigation did not retain the view while loading");
+    wait_terrain_job();
     if (state->center != std::array<int, 3>{ 1, 99, 1 } ||
         cells_json() != complete || !mat4_equal(camera->mat, navigation))
         throw std::runtime_error(
                 "Camera navigation changed authored content or camera pose");
+    reference_before = state->reference.get();
+    auto visible = state->tiles;
+    auto revision = state->view_revision;
+    float preview[4][4];
+    bbox_from_extents(preview, VEC(state->view_max[0] + .5f, -1.5f, 99.5f),
+                      .5f, .5f, .5f);
+    if (crystal_prepare_preview(preview) || state->view_revision != revision ||
+        state->reference.get() != reference_before)
+        throw std::runtime_error("Unready hover replaced the visible terrain");
+    crystal_follow_view(camera);
+    if (!terrain_job || !terrain_job->prefetch)
+        throw std::runtime_error("Camera did not prepare surrounding terrain");
+    wait_terrain_job();
+    if (state->cache.size() <= visible.size() || state->tiles != visible ||
+        state->reference.get() != reference_before ||
+        state->view_revision != revision || !state->prefetch_error.empty())
+        throw std::runtime_error(
+                "Prefetch changed the view or lost nearby data");
+    mat4_itranslate(camera->mat, NATIVE_TILE_EDGE, 0, 0);
+    crystal_follow_view(camera);
+    if (terrain_job || state->view_revision != revision)
+        throw std::runtime_error("Small camera pans reloaded the visible view");
+    mat4_itranslate(camera->mat, NATIVE_TILE_EDGE, 0, 0);
+    crystal_follow_view(camera);
+    wait_terrain_job();
+    if (state->center[0] != 1 + 2 * NATIVE_TILE_EDGE)
+        throw std::runtime_error(
+                "Camera did not extend terrain near the view edge");
+    auto memory_views = state->memory_views;
+    mat4_copy(navigation, camera->mat);
+    crystal_follow_view(camera);
+    wait_terrain_job();
+    if (state->center != std::array<int, 3>{ 1, 99, 1 } ||
+        state->memory_views <= memory_views || cells_json() != complete ||
+        state->cache_bytes > MAX_CACHED_BYTES)
+        throw std::runtime_error(
+                "Returning camera failed to reuse bounded terrain cache");
+    mat4_itranslate(camera->mat, 4 * NATIVE_TILE_EDGE, 0, 0);
+    crystal_follow_view(camera);
+    if (!terrain_job || terrain_job->prefetch)
+        throw std::runtime_error("Stale navigation fixture did not start");
     state->follow_view = false;
     visit_location(center, true);
+    revision = state->view_revision;
+    reference_before = state->reference.get();
+    wait_terrain_job();
+    if (state->view_revision != revision || state->center != center ||
+        state->reference.get() != reference_before || cells_json() != complete)
+        throw std::runtime_error(
+                "Stale navigation replaced an explicitly selected location");
+    state->follow_view = true;
+    mat4_copy(navigation, camera->mat);
+    crystal_follow_view(camera);
+    if (!terrain_job)
+        throw std::runtime_error("Document reset fixture did not start a job");
+    auto document = state->document;
+    crystal_reset();
+    if (load_from_file(project.c_str(), true) != 0 ||
+        !state || state->document == document)
+        throw std::runtime_error("Document reset fixture did not reopen");
+    state->follow_view = false;
+    reference_before = state->reference.get();
+    wait_terrain_job();
+    if (state->center != center || cells_json() != complete ||
+        state->reference.get() != reference_before)
+        throw std::runtime_error(
+                "Old document job changed the reopened project");
 
     // Force a neighboring cache failure after a successful drag segment
     frame();
@@ -1617,13 +2084,62 @@ void world_smoke(const char *output)
         throw std::runtime_error(
                 "Failed boundary loading committed a partial stroke or view");
     failed_tile_request.clear();
+    reference_before = state->reference.get();
+    start_terrain_job(state->center, true);
+    wait_terrain_job();
+    if (state->prefetch_error.empty() || cells_json() != stable ||
+        state->reference.get() != reference_before)
+        throw std::runtime_error(
+                "Failed prefetch changed the document or concealed its error");
+    std::ofstream(mesh_path, std::ios::binary) << restore.bytes;
+    start_terrain_job(state->center, true);
+    wait_terrain_job();
+    if (!state->prefetch_error.empty() || cells_json() != stable ||
+        state->reference.get() != reference_before)
+        throw std::runtime_error("Prefetch did not recover after cache repair");
+    state->follow_view = true;
+    auto pan = [&](int direction) {
+        input.touches[0].pos[0] = 800;
+        input.touches[0].pos[1] = 400;
+        frame(); frame();
+        input.touches[0].down[2] = true;
+        frame(); frame();
+        for (int i = 1; i <= 20; i++) {
+            input.touches[0].pos[0] = 800 + direction * i * 20;
+            frame();
+            if (state->size != std::array<int, 3>{ 80, 80, 80 })
+                throw std::runtime_error("Mouse pan collapsed the native view");
+        }
+        input.touches[0].down[2] = false;
+        input.touches[0].pos[0] = -1;
+        auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(30);
+        do {
+            frame();
+            if (std::chrono::steady_clock::now() > deadline)
+                throw std::runtime_error(
+                        "Mouse pan loading exceeded its deadline");
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        } while (terrain_job);
+        if (state->size != std::array<int, 3>{ 80, 80, 80 } ||
+            cells_json() != stable || !state->prefetch_error.empty())
+            throw std::runtime_error(
+                    "Mouse pan changed the document or view size");
+    };
+    pan(-1);
+    pan(1);
+    state->follow_view = false;
+    visit_location(center, true);
     benchmark_views();
     std::vector<uint8_t> pixels(1024 * 768 * 4);
     goxel_render_to_buf(pixels.data(), 1024, 768, 4);
     img_write(pixels.data(), 1024, 768, 4,
               (std::string(output) + ".world.png").c_str());
     printf("crystal-goxel world smoke: boundaryStroke=ok distantEdit=ok "
-           "boundaryShape=ok cameraFollow=ok undoRedo=ok bookmarks=ok "
+           "boundaryShape=ok cameraFollow=ok prefetch=ok hover=ok smallPan=ok "
+           "memoryReuse=ok cacheEviction=ok staleNavigation=ok "
+           "documentReset=ok prefetchRecovery=ok mousePan=ok "
+           "undoRedo=ok bookmarks=ok "
            "persistence=ok combinedExport=ok "
            "stableIdentities=ok failedStrokeAtomicity=ok\n");
 }

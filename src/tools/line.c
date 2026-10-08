@@ -133,7 +133,7 @@ static int on_hover(gesture3d_t *gest)
         return 0;
     }
     get_box(gest->pos, NULL, gest->normal, goxel.tool_radius, NULL, box);
-    if (!crystal_prepare_edit(box)) {
+    if (!crystal_prepare_preview(box)) {
         volume_delete(goxel.tool_volume);
         goxel.tool_volume = NULL;
         return 0;

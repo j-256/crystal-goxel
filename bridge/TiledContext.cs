@@ -9,6 +9,7 @@ internal sealed class TiledContext : IDisposable
     internal const int Format = 2;
     internal const int TileSize = 16;
     internal const int MaxViewTiles = 125;
+    internal const int MaxPrefetchTiles = 343;
     internal const int ViewTileRadius = 2;
     internal const int WorldExtent = 10000;
     internal static readonly int[] DocumentOrigin = [0, 0, 0];
@@ -34,15 +35,16 @@ internal sealed class TiledContext : IDisposable
         Math.Abs((long)point[0]) <= WorldExtent && point[1] >= 0 && point[1] < 256 &&
         Math.Abs((long)point[2]) <= WorldExtent;
 
-    internal static List<int[]> Keys(int[] min, int[] max)
+    internal static List<int[]> Keys(int[] min, int[] max, bool prefetch = false)
     {
         if (min.Length != 3 || max.Length != 3 || !Inside(min) ||
             !Inside(max.Select(v => v - 1).ToArray()) ||
             Enumerable.Range(0, 3).Any(i => min[i] >= max[i]))
             throw new InvalidDataException("Tile request exceeds supported world bounds");
         var first = Key(min); var last = Key(max.Select(v => v - 1).ToArray());
-        if (Enumerable.Range(0, 3).Aggregate(1L, (n, i) => n * (last[i] - first[i] + 1)) > MaxViewTiles)
-            throw new InvalidDataException("Editing area exceeds the tile preparation limit; use a smaller selection");
+        var limit = prefetch ? MaxPrefetchTiles : MaxViewTiles;
+        if (Enumerable.Range(0, 3).Aggregate(1L, (n, i) => n * (last[i] - first[i] + 1)) > limit)
+            throw new InvalidDataException("Tile request exceeds the preparation limit; use a smaller area");
         var result = new List<int[]>();
         for (var x = first[0]; x <= last[0]; x++)
             for (var y = first[1]; y <= last[1]; y++)
@@ -174,10 +176,10 @@ internal sealed class TiledContext : IDisposable
         return ReadTile(key);
     }
 
-    internal void Prepare(int[] min, int[] max, string output)
+    internal void Prepare(int[] min, int[] max, string output, bool prefetch = false)
     {
         var tiles = new JsonArray();
-        foreach (var key in Keys(min, max)) tiles.Add(Ensure(key));
+        foreach (var key in Keys(min, max, prefetch)) tiles.Add(Ensure(key));
         // A request is published only when every tile is ready; an interrupted request leaves reusable cache files
         using var file = new FileStream(output, FileMode.CreateNew, FileAccess.Write);
         JsonSerializer.Serialize(file, new JsonObject
