@@ -40,10 +40,15 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             python3 scripts/crystal-release.py version --tag "${GITHUB_REF#refs/tags/}"
           fi
-      - name: Inspect Windows checkout
+      - name: Prepare Windows checkout
         run: |
+          # Recreate only the fresh CI checkout so both Git clients agree on line endings
+          git config --local core.autocrlf false
+          git checkout-index --force --all
+          git diff --exit-code
           git --version
           git status --short
+          git ls-files --eol CRYSTAL_VERSION
           git config --show-origin --get-regexp '^core\.(autocrlf|filemode|symlinks)$' || true
       - name: Build portable Crystal Goxel
         run: scripts/package-crystal-windows
