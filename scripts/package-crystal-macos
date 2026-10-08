@@ -5,10 +5,10 @@ set -euo pipefail
 usage() {
     cat <<'HELP'
 Usage: scripts/package-crystal-macos [-h|--help]
-Build an offline Crystal Goxel.app for the host Mac (arm64 or x64)
+Build an offline Crystal Goxel.app for Apple Silicon, targeting macOS 15
 
-Requires Xcode command line tools, Python 3, .NET SDK 10, pkg-config and GLFW
-The build restores pinned SCons and .NET runtime dependencies from the network
+Requires Xcode command line tools, Python 3, .NET SDK 10, pkg-config and CMake
+The build downloads pinned GLFW source, SCons and .NET runtime dependencies
 The resulting app needs neither Python, .NET nor Homebrew to run
 Game resources are selected separately; none are bundled with the app
 No environment variables are required
@@ -26,24 +26,19 @@ if [ "$(uname -s)" != Darwin ]; then
     printf '%s\n' 'This package command requires macOS' >&2
     exit 2
 fi
-for dependency in python3 dotnet pkg-config clang otool install_name_tool codesign plutil; do
+for dependency in python3 dotnet pkg-config cmake curl shasum tar clang otool install_name_tool codesign plutil lipo; do
     if ! command -v "$dependency" >/dev/null 2>&1; then
         printf 'Missing dependency: %s\n' "$dependency" >&2
         exit 3
     fi
 done
-if ! pkg-config --exists glfw3; then
-    printf '%s\n' 'Missing GLFW development package (brew install glfw pkgconf)' >&2
-    exit 3
-fi
 if ! dotnet --list-sdks | awk '/^10\./ {found=1} END {exit !found}'; then
     printf '%s\n' 'Missing .NET SDK 10' >&2
     exit 3
 fi
 case "$(uname -m)" in
     arm64) runtime='osx-arm64' ;;
-    x86_64) runtime='osx-x64' ;;
-    *) printf '%s\n' 'Unsupported Mac architecture' >&2; exit 2 ;;
+    *) printf '%s\n' 'The preview Mac package requires an Apple Silicon build host' >&2; exit 2 ;;
 esac
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_root"
@@ -51,16 +46,33 @@ if [ ! -x .build-env/bin/scons ]; then
     python3 -m venv .build-env >&2
     .build-env/bin/pip install 'scons==4.10.1' >&2
 fi
-glfw_directory="$(pkg-config --variable=libdir glfw3)"
-minimum_macos="$(otool -l "$glfw_directory/libglfw.3.dylib" | awk '$1 == "cmd" {minimum=($2 == "LC_BUILD_VERSION" || $2 == "LC_VERSION_MIN_MACOSX")} minimum && ($1 == "minos" || $1 == "version") {if ($2 + 0 > 13) print $2; else print "13.0"; exit}')"
-if [ -z "$minimum_macos" ]; then
-    printf '%s\n' 'Cannot determine GLFW macOS deployment target' >&2
-    exit 2
+minimum_macos='15.0'
+glfw_version='3.5.1'
+glfw_sha256='5234f4f29473e9a06bc7847d8371858dd135d38466eeeaa652fdc9f8f9ff0c20'
+glfw_archive="build/glfw-$glfw_version.tar.gz"
+glfw_prefix="$project_root/build/glfw-prefix"
+mkdir -p build
+if [ ! -f "$glfw_archive" ]; then
+    curl --fail --location --silent --show-error \
+        "https://github.com/glfw/glfw/archive/refs/tags/$glfw_version.tar.gz" \
+        -o "$glfw_archive"
 fi
-# Pin compiler and linker targets so the bundle's declared minimum matches its Mach-O load commands
+printf '%s  %s\n' "$glfw_sha256" "$glfw_archive" | shasum -a 256 -c - >&2
+tar -xzf "$glfw_archive" -C build
+# Build the dependency at the supported target instead of inheriting a Homebrew bottle's host minimum
+cmake -S "build/glfw-$glfw_version" -B build/glfw-build \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$glfw_prefix" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$minimum_macos" \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 -DBUILD_SHARED_LIBS=ON \
+    -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF >&2
+cmake --build build/glfw-build --parallel 8 >&2
+cmake --install build/glfw-build >&2
+glfw_directory="$glfw_prefix/lib"
+# Pin editor targets too so the declared minimum matches every bundled Mach-O load command
 CFLAGS="${CFLAGS:-} -mmacosx-version-min=$minimum_macos" \
 CXXFLAGS="${CXXFLAGS:-} -mmacosx-version-min=$minimum_macos" \
 LDFLAGS="${LDFLAGS:-} -mmacosx-version-min=$minimum_macos" \
+PKG_CONFIG_PATH="$glfw_prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
     .build-env/bin/scons -j8 mode=release yocto=0 >&2
 app='dist/Crystal Goxel.app'
 rm -rf "$app"
@@ -97,4 +109,5 @@ plutil -lint "$app/Contents/Info.plist" >&2
 codesign --force --sign - "$app/Contents/Frameworks/libglfw.3.dylib" >&2
 codesign --force --sign - "$app/Contents/MacOS/goxel" >&2
 codesign --force --sign - "$app" >&2
+python3 scripts/check-macos-package.py "$app" >&2
 printf '%s/%s\n' "$project_root" "$app"

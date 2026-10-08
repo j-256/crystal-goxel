@@ -10,13 +10,13 @@ For Windows, follow the [Windows build instructions](README.md#build-the-windows
 
 The Windows launcher uses Unicode Win32 APIs, explicit argument quoting and a restricted inherited-handle list so foreground and prefetch helpers can run concurrently. The executable's UTF-8 manifest keeps native dialog paths compatible with Goxel's narrow file APIs. Temporary helper workspaces use unique names in the user's temporary directory and are removed on success or failure. Packaged executables import only bundled or Windows system libraries; the package checker rejects missing DLL dependencies. The build is unsigned.
 
-On macOS, install Xcode command line tools, Python 3, .NET SDK 10, and `brew install glfw pkgconf`, then run:
+On an Apple Silicon Mac, install Xcode command line tools, Python 3, .NET SDK 10, and `brew install cmake pkgconf`, then run:
 
 ```sh
 scripts/package-crystal-macos
 ```
 
-The command creates `dist/Crystal Goxel.app` with its own .NET runtime and GLFW library. Build-time dependency restoration needs network access. The generated app runs offline without Homebrew or a separate .NET installation. Its macOS deployment target follows the installed GLFW library, with a floor of macOS 13; only the build host has been exercised. It uses local ad hoc signing for development; it is not a notarized release.
+The command creates `dist/Crystal Goxel.app` with its own .NET runtime and GLFW library, targeting macOS 15 or later on Apple Silicon. GLFW is built from pinned source for that target; every bundled native binary is checked for its deployment minimum, architecture and dependencies. The minimum follows the helper's [.NET supported OS policy](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md); execution on the oldest target still needs contributor testing. Build-time dependency restoration needs network access. The generated app runs offline without Homebrew or a separate .NET installation. It uses local ad hoc signing for development; it is not a notarized release.
 
 Create a world cache from your own Windows game installation. Choose a new private output directory outside the repository:
 

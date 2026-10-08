@@ -32,12 +32,12 @@ Open `dist/Crystal Goxel Windows/CrystalGoxel.exe`. Keep the complete folder tog
 With Xcode command line tools, Python 3 and .NET SDK 10 installed, run from the repository root:
 
 ```sh
-brew install glfw pkgconf
+brew install cmake pkgconf
 scripts/package-crystal-macos
 open "dist/Crystal Goxel.app"
 ```
 
-The package includes its own .NET runtime and GLFW library. Building restores dependencies over the network; the generated app runs offline without Homebrew or a separate .NET installation. This is an ad hoc signed development bundle, not a notarized release.
+The Apple Silicon package targets macOS 15 or later and includes its own .NET runtime and GLFW library. The build compiles pinned GLFW source for that deployment target and checks every bundled native binary, avoiding a newer minimum inherited from a Homebrew bottle. Building restores dependencies over the network; the generated app runs offline without Homebrew or a separate .NET installation. This is an ad hoc signed development bundle, not a notarized release. Running on the oldest supported target still needs contributor testing.
 
 ### Open your first world
 
