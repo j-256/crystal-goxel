@@ -72,6 +72,23 @@ internal sealed class NativeWorld
         return biomes[(cx, y / 16, cz)][(x - cx * 16) / 8 * 4 + y % 16 / 8 * 2 + (z - cz * 16) / 8];
     }
 
+    internal IEnumerable<byte[]> EntityChunks()
+    {
+        // Entity entries are separate from terrain; use the original reader for their variable layouts
+        foreach (var region in regions.OrderBy(r => r.Key.X).ThenBy(r => r.Key.Z))
+        {
+            using var zip = new ZipArchive(new MemoryStream(data, region.Value.Offset, region.Value.Length), ZipArchiveMode.Read);
+            foreach (var entry in zip.Entries.OrderBy(e => e.FullName, StringComparer.Ordinal))
+            {
+                if (!entry.FullName.EndsWith("e.dat", StringComparison.Ordinal)) continue;
+                if (!entry.FullName.StartsWith('y') ||
+                    !int.TryParse(entry.FullName[1..^5], out var y) || y is < 0 or >= 16)
+                    throw new InvalidDataException("Unsupported native entity chunk name");
+                yield return Expand(entry);
+            }
+        }
+    }
+
     private static int Count(BinaryReader reader, int limit)
     {
         var value = reader.ReadInt32();

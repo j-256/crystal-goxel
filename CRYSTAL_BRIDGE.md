@@ -29,6 +29,18 @@ You can also use Create tiled world in the Crystal Project panel: choose the Win
 
 A tiled document uses global game coordinates and holds every authored location in one `.gox` project. World X and World Z are horizontal; Height Y is vertical. Go to location loads an 80 x 80 x 80 block neighborhood and frames that location. The panel shows the loaded dimensions, which shrink at supported world edges. Save named locations to return to them from the panel. Follow camera loads terrain around the camera's orbit target as you pan. Changing the view replaces reference geometry while preserving all authored layers, offscreen edits, original imported entities and entity ID reservations.
 
+Native locations provides destinations in every tiled context without opening a starter `.gox`. Search by area or place name, choose a destination, and use Go to selected place. The list combines home point entities with named system landmarks, including the Spawn Point, race starts, receptions, shrine destinations and the Labyrinth exit. Entries show their type and exact coordinates. Names and coordinates come from the supported vanilla world and fingerprinted system and biome definitions. Supported zone-name variables resolve through those definitions; names with other text variables use an explicit source ID label. The dynamic Home Point system slot is excluded because its gameplay destination depends on save state. These editor destinations describe the vanilla world, including locations outside the player's discovered areas; they do not apply save progression or randomizer redirects. Saved locations remains the separate list of project bookmarks.
+
+The helper generates a fingerprinted `locations.json` sidecar in the private world cache. New caches include it; existing caches generate it on their first open with the supported installation available. Cached catalogs work offline. Legacy catalogs containing only home points upgrade when the installation is available; offline they keep their validated destinations with an explicit pending landmark upgrade. Catalog results expose `hasLandmarks` and an optional `warning` for that partial state. The sidecar does not change `world.json`, tile identity or existing `.gox` context fingerprints, and native destinations never enter authored project metadata or Crystal Edit exports. Missing resources or damaged catalog data leave the native view and authored work available and expose Retry native locations. Restore damaged catalog data from a known-good copy before retrying; corrupt files are reported rather than silently replaced.
+
+To read or prepare the catalog separately:
+
+```sh
+"dist/Crystal Goxel.app/Contents/Resources/Bridge/crystal-bridge" locations \
+  --context "/path/to/world-cache/world.json" \
+  --output "/path/to/new-locations.json"
+```
+
 The initial location `(1, 99, 1)` is the vanilla new-game starting floor. The native Spawn Point marker is `(1, 110, 1)`; field setup moves the player down to the ground before play starts. Randomizer redirects and existing saves can start elsewhere. Supported authored coordinates span X and Z from -10000 through 10000 and Y from 0 through 255.
 
 Terrain is cached in native-aligned tiles with a 16-cell edge. Each tile emits only its owned cells, while the original mesh builder can read neighboring cells across the edge. Adjacent tiles share the same global coordinate transform and texture atlas; they require no manual stitching. Brush strokes, lines, shapes, extrusion and moves prepare their complete operation bounds before changing authored content. A failed tile load cancels the gesture instead of committing a partial edit. Undo and redo work across tile boundaries and locations.
@@ -63,7 +75,9 @@ The helper checks executable, voxel database and native world fingerprints befor
 
 ## Verification
 
-Synthetic checks exercise negative tile ownership, cross-edge neighbor sampling, coordinate transforms, bounded requests, offline cached views, failed preparation and asset tampering. Project checks cover distant locations in one document, supported and unsupported NPC imports, construction defaults, imported physics preservation, stable project and entity identity, editor-tree reservations, source order, exact large numbers and overwrite protection:
+Synthetic checks exercise negative tile ownership, cross-edge neighbor sampling, coordinate transforms, bounded requests, offline cached views, failed preparation and asset tampering. Project checks cover distant locations in one document, supported and unsupported NPC imports, construction defaults, imported physics preservation, stable project and entity identity, editor-tree reservations, source order, exact large numbers and overwrite protection.
+
+Synthetic location checks cover source IDs and coordinates, non-crystal landmarks, exclusion of dynamic destinations, distinct source identity namespaces, zone-name resolution, explicit unsupported text, duplicate identities, coordinate and catalog bounds, offline fresh-context access, legacy catalog recovery, unchanged world manifests, overwrite protection, damaged catalogs and missing resources. Run the checks with:
 
 ```sh
 dotnet run --project bridge/CrystalBridge.csproj -c Release -- test
@@ -78,6 +92,8 @@ The GPU smoke check creates a hidden GLFW window on a graphical desktop. It requ
 ```
 
 For a tiled context it also checks a mouse stroke and shape across a tile edge, undo/redo, an edit at a distant location, camera-follow loading, saved locations, whole-document save/reopen, stable repeated exports and a corrupted neighboring tile that cancels a gesture without changing content or the active view. These location fixtures use the supported vanilla world.
+
+Native destination checks start without a `.gox` or project bookmarks, exercise case-insensitive name and area search, visit the non-crystal Spawn Point and a home point without changing authored layers, and verify catalog recovery, document reopen and exclusion from mod exports.
 
 The smoke output includes a PNG, `.png.gox` project and `.png.json` Crystal Edit source, plus imported-project round-trip artifacts. Tiled checks add `.png.world.gox`, `.png.world.json`, repeated-export JSON and a world-view PNG. Use a new basename for each run. Missing-context and save-limit diagnostics are expected during this check.
 

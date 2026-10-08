@@ -117,6 +117,7 @@ internal sealed class TiledContext : IDisposable
                 voxelSha256 = NativeGame.ReviewedVoxels, blocks, files
             };
             File.WriteAllText(Path.Combine(staging, "world.json"), JsonSerializer.Serialize(context, Context.JsonOptions));
+            NativeLocations.Create(game, world, Projects.Read(Path.Combine(staging, "world.json")), staging);
             Directory.Move(staging, Path.GetFullPath(output));
         }
         catch { Directory.Delete(staging, true); throw; }

@@ -13,6 +13,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -46,6 +47,11 @@ constexpr int CAMERA_EDGE_MARGIN = NATIVE_TILE_EDGE;
 constexpr int WORLD_EXTENT = 10000;
 constexpr int WORLD_HEIGHT = 256;
 constexpr unsigned MAX_BOOKMARKS = 64;
+constexpr unsigned MAX_NATIVE_LOCATIONS = 256;
+constexpr size_t MAX_LOCATION_BYTES = 256 * 1024;
+constexpr size_t MAX_LOCATION_LABEL_BYTES = 1024;
+constexpr char HOME_POINT_KIND[] = "homePoint";
+constexpr char TELEPORT_POINT_KIND[] = "teleportPoint";
 constexpr char DEFAULT_EXPORT_NAME[] = "crystal-project.json";
 static_assert((VIEW_TILE_RADIUS * 2 + 1) * (VIEW_TILE_RADIUS * 2 + 1) *
               (VIEW_TILE_RADIUS * 2 + 1) <= MAX_VIEW_TILES,
@@ -55,6 +61,12 @@ using Model = std::unique_ptr<model3d_t, decltype(&model3d_delete)>;
 struct Block {
     int id, max_variant;
     std::string name;
+};
+struct NativeLocation {
+    int id;
+    std::string kind, name, area;
+    std::array<int, 3> world;
+    bool name_resolved;
 };
 struct FileStamp {
     uintmax_t size;
@@ -109,6 +121,10 @@ struct State {
     std::string prefetch_error;
     bool tiled = false;
     bool follow_view = true;
+    std::vector<NativeLocation> locations;
+    std::string locations_error;
+    char location_search[128] = {};
+    int location_selected = 0;
     std::vector<Block> blocks;
     std::map<int, std::vector<model_vertex_t>> templates;
     Model reference{ nullptr, model3d_delete };
@@ -743,6 +759,144 @@ void visit_location(const std::array<int, 3> &center, bool frame)
     }
     failed_tile_request.clear();
     status = "Location loaded. Edits at other locations remain in this mod.";
+}
+
+void load_native_locations(State &saved)
+{
+    try {
+        Temporary work;
+        auto output = (work.directory / "locations.json").string();
+        run_helper({ "locations", "--context", saved.path,
+                     "--output", output });
+        auto root = parse(read_file(output, MAX_LOCATION_BYTES));
+        const auto &entries = (*root)["entries"];
+        if (entries.type != json_array || !entries.u.array.length ||
+            entries.u.array.length > MAX_NATIVE_LOCATIONS)
+            throw std::runtime_error("Invalid native location catalog");
+        std::vector<NativeLocation> locations;
+        std::set<std::string> ids;
+        for (unsigned i = 0; i < entries.u.array.length; i++) {
+            const auto &entry = entries[i];
+            auto point = triple(entry["world"]);
+            check_location(point);
+            auto id = number(entry["id"]);
+            auto kind = string(entry["kind"]);
+            auto name = string(entry["name"]), area = string(entry["area"]);
+            if ((kind != HOME_POINT_KIND && kind != TELEPORT_POINT_KIND) ||
+                id < 0 || !ids.insert(kind + ":" + std::to_string(id)).second ||
+                name.empty() ||
+                area.empty() || name.size() > MAX_LOCATION_LABEL_BYTES ||
+                area.size() > MAX_LOCATION_LABEL_BYTES ||
+                entry["nameResolved"].type != json_boolean)
+                throw std::runtime_error("Invalid native location entry");
+            locations.push_back({ id, kind, name, area, point,
+                                 bool(entry["nameResolved"].u.boolean) });
+        }
+        std::sort(locations.begin(), locations.end(),
+                  [](const NativeLocation &left, const NativeLocation &right) {
+                      if (left.area != right.area)
+                          return left.area < right.area;
+                      if (left.name != right.name)
+                          return left.name < right.name;
+                      if (left.kind != right.kind)
+                          return left.kind < right.kind;
+                      return left.id < right.id;
+                  });
+        saved.locations = std::move(locations);
+        auto distance = [&saved](const NativeLocation &location) {
+            int64_t result = 0;
+            for (int i = 0; i < 3; i++) {
+                int64_t delta = location.world[i] - saved.center[i];
+                result += delta * delta;
+            }
+            return result;
+        };
+        auto nearest = std::min_element(saved.locations.begin(),
+                                       saved.locations.end(),
+                [&distance](const NativeLocation &left,
+                            const NativeLocation &right) {
+                    return distance(left) < distance(right);
+                });
+        saved.location_selected = nearest - saved.locations.begin();
+        saved.locations_error.clear();
+        if ((*root)["warning"].type == json_string)
+            saved.locations_error = string((*root)["warning"]);
+    }
+    catch (const std::exception &error) {
+        // Optional navigation cannot prevent opening terrain or authored work
+        saved.locations_error = error.what();
+        fprintf(stderr, "crystal-goxel locations: %s\n", error.what());
+    }
+}
+
+bool location_matches(const NativeLocation &location, const char *query)
+{
+    auto lower = [](std::string text) {
+        for (auto &c : text) c = char(std::tolower(uint8_t(c)));
+        return text;
+    };
+    return lower(location.area + " " + location.name).find(lower(query)) !=
+           std::string::npos;
+}
+
+const char *native_location_type(const NativeLocation &location)
+{
+    return location.kind == TELEPORT_POINT_KIND ? "Landmark" : "Home point";
+}
+
+void native_locations_panel()
+{
+    if (gui_section_begin("Native locations", GUI_SECTION_COLLAPSABLE)) {
+        gui_text("Search places");
+        gui_input_text("##native-location-search", state->location_search,
+                       sizeof(state->location_search));
+        std::vector<int> matches;
+        for (unsigned i = 0; i < state->locations.size(); i++)
+            if (location_matches(state->locations[i], state->location_search))
+                matches.push_back(i);
+        if (!matches.empty()) {
+            if (std::find(matches.begin(), matches.end(),
+                          state->location_selected) == matches.end())
+                state->location_selected = matches.front();
+            auto &current = state->locations[state->location_selected];
+            if (gui_combo_begin("##native-location", current.name.c_str())) {
+                for (int i : matches) {
+                    auto &location = state->locations[i];
+                    auto label = location.name + " [" +
+                                 native_location_type(location) + "] - " +
+                                 location.area +
+                                 "##native-location-" +
+                                 location.kind + std::to_string(location.id);
+                    if (gui_combo_item(label.c_str(),
+                                       state->location_selected == i))
+                        state->location_selected = i;
+                }
+                gui_combo_end();
+            }
+            auto &location = state->locations[state->location_selected];
+            gui_text_wrapped("%s", location.area.c_str());
+            gui_text_wrapped("%s", location.name.c_str());
+            gui_text("%s", native_location_type(location));
+            gui_text("World: %d, %d, %d", location.world[0],
+                     location.world[1], location.world[2]);
+            if (!location.name_resolved)
+                gui_text_wrapped("This place's native name uses "
+                                 "unresolved text variables.");
+            if (gui_button("Go to selected place", 0, 0))
+                visit_location(location.world, true);
+        } else if (state->locations_error.empty()) {
+            gui_text_wrapped("No places match your search.");
+        }
+        if (!state->locations_error.empty()) {
+            gui_text_wrapped(state->locations.empty() ?
+                             "Native locations unavailable: %s" :
+                             "Some landmarks unavailable: %s",
+                             state->locations_error.c_str());
+            if (gui_button("Retry native locations", 0, 0))
+                load_native_locations(*state);
+        }
+    }
+    gui_section_end();
 }
 
 void add_bookmark(const std::string &name)
@@ -1401,6 +1555,7 @@ extern "C" bool crystal_load(const char *path, bool frame)
         }
         if (next->tiled) {
             location_view(*next, next->center);
+            load_native_locations(*next);
         } else {
             std::vector<model_vertex_t> mesh;
             reference_geometry(directory, next->origin, next->size, false,
@@ -1574,6 +1729,7 @@ extern "C" void crystal_panel(void)
                     state->prefetch_error.clear();
                     visit_location(state->center, false);
                 }
+                native_locations_panel();
                 if (gui_section_begin("Saved locations",
                                       GUI_SECTION_COLLAPSABLE_CLOSED)) {
                     gui_input_text("Location name", bookmark_input,
@@ -1735,6 +1891,35 @@ void wait_terrain_job()
             throw std::runtime_error("Terrain smoke job exceeded its deadline");
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
+}
+
+void native_locations_smoke()
+{
+    auto path = state->path;
+    auto catalog_path = std::filesystem::path(path).parent_path() /
+                        "locations.json";
+    auto original = read_file(catalog_path);
+    auto saved = saved_data(*state);
+    auto authored = cells_json();
+    try {
+        std::ofstream(catalog_path) << "{}";
+        if (!crystal_load(path.c_str(), false) || !state ||
+            state->locations_error.empty() || !state->locations.empty() ||
+            cells_json() != authored || saved_data(*state) != saved ||
+            !state->reference || !state->reference->nb_vertices)
+            throw std::runtime_error(
+                    "Unavailable native locations prevented document recovery");
+    }
+    catch (...) {
+        std::ofstream(catalog_path) << original;
+        throw;
+    }
+    std::ofstream(catalog_path) << original;
+    load_native_locations(*state);
+    if (!state->locations_error.empty() || state->locations.empty() ||
+        cells_json() != authored || saved_data(*state) != saved)
+        throw std::runtime_error(
+                "Native location retry changed authored state");
 }
 
 void cache_eviction_smoke()
@@ -1931,10 +2116,11 @@ void world_smoke(const char *output)
     auto project = std::string(output) + ".world.gox";
     auto center = state->center;
     auto bookmarks = state->bookmarks;
+    auto locations = state->locations.size();
     save_to_file(goxel.image, project.c_str());
     if (load_from_file(project.c_str(), true) != 0 ||
         cells_json() != complete || state->center != center ||
-        state->bookmarks != bookmarks) {
+        state->bookmarks != bookmarks || state->locations.size() != locations) {
         fprintf(stderr, "world reopen diagnostic: cells=%s expected=%s "
                         "location=%s expectedLocation=%s bookmarks=%s "
                         "expectedBookmarks=%s\n",
@@ -1948,6 +2134,10 @@ void world_smoke(const char *output)
     auto exported = std::string(output) + ".world.json";
     export_project(exported.c_str());
     auto first = parse(read_file(exported));
+    if ((*first)["locations"].type != json_none ||
+        (*first)["bookmarks"].type != json_none)
+        throw std::runtime_error(
+                "Native navigation entered an authored export");
     auto assignments = state->identities;
     save_to_file(goxel.image, project.c_str());
     if (load_from_file(project.c_str(), true) != 0 ||
@@ -2139,7 +2329,7 @@ void world_smoke(const char *output)
            "boundaryShape=ok cameraFollow=ok prefetch=ok hover=ok smallPan=ok "
            "memoryReuse=ok cacheEviction=ok staleNavigation=ok "
            "documentReset=ok prefetchRecovery=ok mousePan=ok "
-           "undoRedo=ok bookmarks=ok "
+           "undoRedo=ok bookmarks=ok nativeLocations=ok "
            "persistence=ok combinedExport=ok "
            "stableIdentities=ok failedStrokeAtomicity=ok\n");
 }
@@ -2150,6 +2340,52 @@ extern "C" int crystal_smoke(const char *output)
     try {
         if (!state)
             throw std::runtime_error("Smoke check requires --crystal-context");
+        if (state->tiled) {
+            if (state->locations.empty() || !state->locations_error.empty() ||
+                state->bookmarks != "[]")
+                throw std::runtime_error(
+                        "Fresh native context requires destinations "
+                        "without bookmarks");
+            auto location = std::find_if(state->locations.begin(),
+                                        state->locations.end(),
+                    [](const NativeLocation &point) {
+                        return point.world ==
+                               std::array<int, 3>{ 115, 109, -18 };
+                    });
+            if (location == state->locations.end() ||
+                !location_matches(*location, "sPaWnInG") ||
+                !location_matches(*location, "watering") ||
+                location_matches(*location, "nonexistent fixture place"))
+                throw std::runtime_error(
+                        "Native destination search lost its source identity");
+            auto authored = cells_json();
+            auto saved = saved_data(*state);
+            auto spawn = std::find_if(state->locations.begin(),
+                                     state->locations.end(),
+                    [](const NativeLocation &point) {
+                        return point.kind == TELEPORT_POINT_KIND &&
+                               point.id == 0;
+                    });
+            if (spawn == state->locations.end() ||
+                !location_matches(*spawn, "spawn") ||
+                spawn->world != std::array<int, 3>{ 1, 110, 1 })
+                throw std::runtime_error("Native spawn landmark is missing");
+            visit_location(spawn->world, true);
+            if (state->center != spawn->world || state->bookmarks != "[]" ||
+                cells_json() != authored)
+                throw std::runtime_error(
+                        "Native spawn navigation changed authored state");
+            visit_location(location->world, true);
+            if (cells_json() != authored || state->bookmarks != "[]")
+                throw std::runtime_error(
+                        "Native navigation changed authored content "
+                        "or bookmarks");
+            visit_location({ 1, 99, 1 }, true);
+            if (saved_data(*state) != saved)
+                throw std::runtime_error(
+                        "Native catalog entered saved project metadata");
+            native_locations_smoke();
+        }
         if (!goxel.graphics_initialized) goxel_create_graphics();
         goxel.rend.scale = 1;
         std::vector<uint8_t> initial(1024 * 768 * 4);

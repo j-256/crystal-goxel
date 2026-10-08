@@ -14,6 +14,7 @@ internal static class SyntheticTests
         {
             ProjectsRoundTrip(scratch); WorldArchive(scratch);
             TileTests.Run(scratch); WorldProjectTests.Run(scratch);
+            LocationTests.Run(scratch);
         }
         finally { Directory.Delete(scratch, true); }
     }
@@ -164,6 +165,14 @@ internal static class SyntheticTests
         Array.Fill(chunk, (byte)5, 5, 8);
         var last = 13 + 4095 * 4; chunk[last] = 1; chunk[last + 1] = 64; chunk[last + 2] = 15;
         var region = Zip("y0.dat", chunk);
+        using (var stream = new MemoryStream())
+        {
+            stream.Write(region);
+            stream.Position = 0;
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Update, true))
+            using (var entry = archive.CreateEntry("y0e.dat").Open()) entry.Write("synthetic entities"u8);
+            region = stream.ToArray();
+        }
         using var field = new MemoryStream();
         using (var writer = new BinaryWriter(field, System.Text.Encoding.UTF8, true))
         {
@@ -177,6 +186,8 @@ internal static class SyntheticTests
         Require(world.Get(-1, 15, -1) == new Cell(1, 64, 15), "negative native region boundary and cell order");
         Require(world.Biome(-1, 15, -1) == 5, "native biome octant indexing");
         Require(world.Get(0, 15, 0).Type == 0 && world.Get(-1, -1, -1) == Cell.Air, "missing and vertical boundary cells");
+        Require(world.EntityChunks().Single().SequenceEqual("synthetic entities"u8.ToArray()),
+            "native entity chunks remain separate from voxel data");
         File.WriteAllBytes(path, [0, 0]); var rejected = false;
         try { _ = new NativeWorld(path); } catch (InvalidDataException) { rejected = true; }
         Require(rejected, "unsupported native archive rejected");

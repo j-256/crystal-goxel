@@ -135,12 +135,44 @@ internal sealed class NativeGame : IDisposable
 
     internal static JsonElement[] ReadDatabase(string path)
     {
+        using var document = ReadDatabaseJson(path);
+        return document.RootElement.EnumerateArray().Select(v => v.Clone()).ToArray();
+    }
+
+    internal static JsonDocument ReadDatabaseJson(string path)
+    {
         var bytes = File.ReadAllBytes(path);
         if (bytes.Length is < 3 or > 16_000_000) throw new InvalidDataException("Invalid database size");
         var decoded = bytes[2..];
         for (var i = 0; i < decoded.Length; i++) decoded[i] ^= 255;
-        using var document = JsonDocument.Parse(decoded);
-        return document.RootElement.EnumerateArray().Select(v => v.Clone()).ToArray();
+        return JsonDocument.Parse(decoded);
+    }
+
+    internal IEnumerable<NativeLandmark> HomePoints(byte[] bytes)
+    {
+        using var reader = new BinaryReader(new MemoryStream(bytes));
+        if (reader.ReadByte() != 0) throw new InvalidDataException("Unsupported native entity chunk version");
+        var count = reader.ReadInt32();
+        if (count < 0 || count > LastVanillaEntity)
+            throw new InvalidDataException("Invalid native entity chunk count");
+        var entityType = GameType("SangEntity.SangEntityData");
+        var deserialize = GameType("SangEntity.EntitySerializer").GetMethod("Deserialize", [typeof(BinaryReader), entityType.MakeByRefType()])!;
+        for (var i = 0; i < count; i++)
+        {
+            object[] arguments = [reader, Activator.CreateInstance(entityType)!];
+            deserialize.Invoke(null, arguments);
+            var entity = arguments[1];
+            if (entityType.GetField("EntityType")!.GetValue(entity)!.ToString() != "HomePoint") continue;
+            var coord = entityType.GetField("Coord")!.GetValue(entity)!;
+            var outfit = entityType.GetField("HomePointData")!.GetValue(entity)!;
+            yield return new NativeLandmark(
+                (int)entityType.GetField("ID")!.GetValue(entity)!,
+                (string)outfit.GetType().GetField("Name")!.GetValue(outfit)!,
+                (byte)entityType.GetField("BiomeID")!.GetValue(entity)!,
+                new[] { "X", "Y", "Z" }.Select(axis => (int)coord.GetType().GetField(axis)!.GetValue(coord)!).ToArray());
+        }
+        if (reader.BaseStream.Position != reader.BaseStream.Length)
+            throw new InvalidDataException("Native entity chunk has trailing data");
     }
 
     internal bool Visible(byte type) => Definitions[type].ValueKind == JsonValueKind.Object && Definitions[type].GetProperty("Visible").GetBoolean();

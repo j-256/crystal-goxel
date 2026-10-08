@@ -8,6 +8,7 @@ Offline Crystal Project native world context and Crystal Edit project bridge
 
   prepare --game DIR --center X,Y,Z --size X,Y,Z --output NEW_DIR
   world   --game DIR --output NEW_DIR
+  locations --context world.json --output NEW_LOCATIONS.json
   view    --context world.json --center X,Y,Z --output NEW_VIEW.json
   tiles   --context world.json --min X,Y,Z --max X,Y,Z --output NEW_VIEW.json
   prefetch --context world.json --min X,Y,Z --max X,Y,Z --output NEW_VIEW.json
@@ -27,6 +28,11 @@ World caches use format 2, native-aligned 16-cell tiles and shared fingerprinted
 view prepares an 80-cell cube around a location, clipped at world edges.
 tiles prepares up to 125 tiles per request.
 prefetch prepares up to 343 tiles without changing an authored document.
+locations reads or creates a fingerprinted private catalog of home points and
+named system landmarks, including spawn, races, receptions and shrine destinations.
+Cached catalogs work offline and stay separate from authored project bookmarks.
+Legacy home-point catalogs upgrade when their native installation is available;
+offline output retains home points with hasLandmarks=false and a warning.
 No environment variables are required. Native operations need the supported game;
 synthetic tests and validation of existing cache files do not need it.
 Exit status: 0 success, 1 runtime failure, 2 usage/precondition, 3 missing dependency
@@ -79,6 +85,12 @@ try
     string Required(string key) => options.Remove(key, out var value) ? value : throw new ArgumentException("Missing --" + key);
     switch (args[0])
     {
+        case "locations":
+            {
+                var context = Required("context"); var output = Required("output");
+                if (options.Count != 0) throw new ArgumentException("Unknown option");
+                NativeLocations.Export(context, output); break;
+            }
         case "world":
             {
                 var game = Required("game"); var output = Required("output");
