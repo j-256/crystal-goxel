@@ -40,6 +40,11 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             python3 scripts/crystal-release.py version --tag "${GITHUB_REF#refs/tags/}"
           fi
+      - name: Inspect Windows checkout
+        run: |
+          git --version
+          git status --short
+          git config --show-origin --get-regexp '^core\.(autocrlf|filemode|symlinks)$' || true
       - name: Build portable Crystal Goxel
         run: scripts/package-crystal-windows
       - name: Check native helper process contract
@@ -67,6 +72,7 @@ jobs:
           } finally { Pop-Location }
       - name: Archive release download
         run: |
+          git status --short
           version="$(python3 scripts/crystal-release.py version)"
           python3 scripts/crystal-release.py archive 'dist/Crystal Goxel Windows' \
             --platform windows-x64 --output "dist/assets/Crystal-Goxel-$version-windows-x64.zip"
