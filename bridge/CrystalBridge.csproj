@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <RuntimeIdentifiers>osx-arm64;osx-x64;linux-arm64;linux-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>osx-arm64;osx-x64;linux-arm64;linux-x64;win-x64</RuntimeIdentifiers>
     <AssemblyName>crystal-bridge</AssemblyName>
     <Version>0.1.0</Version>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>

@@ -16,7 +16,6 @@ internal sealed class NativeGame : IDisposable
     internal const int EditorVersion = 34;
     internal const int LastVanillaEntity = 3824;
     private const int VertexCapacity = 2048;
-    private readonly string scratch;
     private readonly Assembly game;
     private readonly Type voxelInstance;
     private readonly Type vertexType;
@@ -44,12 +43,10 @@ internal sealed class NativeGame : IDisposable
         ExecutableHash = Hash(executable);
         if (ExecutableHash != ReviewedExecutable)
             throw new InvalidDataException("This build supports the inspected Windows Crystal Project 1.6.9.0 executable");
-        scratch = Path.Combine(Path.GetTempPath(), "crystal-goxel-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(scratch);
         AssemblyLoadContext.Default.Resolving += Resolve;
         try
         {
-            game = AssemblyLoadContext.Default.LoadFromAssemblyPath(HostAssembly("Crystal Project.exe"));
+            game = HostAssembly("Crystal Project.exe");
             var cv = GameType("Voxel.CVoxel");
             voxelInstance = GameType("Voxel.VoxelInstance");
             vertexType = GameType("Gfx.VoxelVertex");
@@ -104,15 +101,18 @@ internal sealed class NativeGame : IDisposable
     {
         if (name.Name is null || !name.Name.All(c => char.IsLetterOrDigit(c) || c is '.' or '_' or '-')) return null;
         var path = Path.Combine(Installation, name.Name + ".dll");
-        return File.Exists(path) ? context.LoadFromAssemblyPath(HostAssembly(name.Name + ".dll")) : null;
+        return File.Exists(path) ? HostAssembly(name.Name + ".dll") : null;
     }
 
-    private string HostAssembly(string name)
+    private Assembly HostAssembly(string name) => LoadManagedAssembly(
+        AssemblyLoadContext.Default, Path.Combine(Installation, name),
+        RuntimeInformation.ProcessArchitecture);
+
+    internal static Assembly LoadManagedAssembly(AssemblyLoadContext context,
+        string path, Architecture architecture)
     {
-        var target = Path.Combine(scratch, Path.GetFileName(name));
-        if (File.Exists(target)) return target;
-        var bytes = File.ReadAllBytes(Path.Combine(Installation, name));
-        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        var bytes = File.ReadAllBytes(path);
+        if (architecture == Architecture.Arm64)
         {
             using var reader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(bytes));
             var header = reader.PEHeaders;
@@ -122,13 +122,14 @@ internal sealed class NativeGame : IDisposable
             var machine = BitConverter.ToUInt16(bytes, pe + 4);
             if (machine == 0x8664)
             {
-                // Only private copies of IL-only assemblies change; supplied game files and their hashes stay intact
+                // Only private IL-only byte copies change; installed files and their hashes stay intact
                 BitConverter.GetBytes((ushort)0xaa64).CopyTo(bytes, pe + 4);
             }
             else if (machine is not (0xaa64 or 0x14c)) throw new InvalidDataException("Unsupported managed assembly architecture");
         }
-        File.WriteAllBytes(target, bytes);
-        return target;
+        // Path-based loading locks assemblies until process exit on Windows
+        using var stream = new MemoryStream(bytes, writable: false);
+        return context.LoadFromStream(stream);
     }
 
     internal static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
@@ -181,7 +182,7 @@ internal sealed class NativeGame : IDisposable
     {
         var editorPath = Path.Combine("Crystal Edit", "Crystal Edit.exe");
         if (Hash(File.ReadAllBytes(Path.Combine(Installation, editorPath))) != ReviewedEditor) throw new InvalidDataException("Crystal Edit executable differs from the inspected build");
-        var editor = AssemblyLoadContext.Default.LoadFromAssemblyPath(HostAssembly(editorPath));
+        var editor = HostAssembly(editorPath);
         var json = AssemblyLoadContext.Default.LoadFromAssemblyName(editor.GetReferencedAssemblies().Single(a => a.Name == "Newtonsoft.Json"));
         var deserialize = json.GetType("Newtonsoft.Json.JsonConvert", true)!.GetMethod("DeserializeObject", [typeof(string), typeof(Type)])!;
         var model = editor.GetType("SangEdit.Models.Entities.ModelEntityData", true)!;
@@ -290,7 +291,6 @@ internal sealed class NativeGame : IDisposable
     public void Dispose()
     {
         AssemblyLoadContext.Default.Resolving -= Resolve;
-        if (Directory.Exists(scratch)) Directory.Delete(scratch, true);
     }
 }
 

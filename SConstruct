@@ -86,6 +86,7 @@ env.Append(CCFLAGS=['-include', '$config_file'])
 
 # Get all the c and c++ files in src, recursively.
 sources = []
+windows_resources = []
 for root, dirnames, filenames in os.walk('src'):
     for filename in filenames:
         if filename.endswith('.c') or filename.endswith('.cpp'):
@@ -112,7 +113,7 @@ if target_os == 'posix':
 
 
 # Windows compilation support.
-if target_os == 'msys' or target_os == 'cygwin':
+if target_os in ('msys', 'cygwin', 'win32'):
     env.Append(CXXFLAGS=['-Wno-attributes', '-Wno-unused-variable',
                          '-Wno-unused-function'])
     env.Append(CCFLAGS=['-Wno-error=address']) # To remove if possible.
@@ -123,6 +124,9 @@ if target_os == 'msys' or target_os == 'cygwin':
     sources.append('ext_src/nfd/nfd_win.cpp')
     env.Append(CPPPATH=['ext_src/glew'])
     env.Append(CPPDEFINES=['GLEW_STATIC', 'FREE_WINDOWS'])
+    windows_resources = env.Command('build/crystal-windows.o',
+                   ['src/crystal-windows.rc', 'src/crystal-windows.manifest'],
+                   'windres -I. $SOURCE $TARGET')
 
 # OSX Compilation support.
 if target_os == 'darwin':
@@ -167,4 +171,4 @@ try:
 except:
     pass
 
-env.Program(target='goxel', source=sorted(sources))
+env.Program(target='goxel', source=sorted(sources) + windows_resources)

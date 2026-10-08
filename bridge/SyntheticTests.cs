@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 using System.IO.Compression;
+using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using System.Text.Json.Nodes;
 
 namespace CrystalBridge;
@@ -15,6 +17,7 @@ internal static class SyntheticTests
             ProjectsRoundTrip(scratch); WorldArchive(scratch);
             TileTests.Run(scratch); WorldProjectTests.Run(scratch);
             LocationTests.Run(scratch);
+            MemoryHosting(scratch);
         }
         finally { Directory.Delete(scratch, true); }
     }
@@ -22,6 +25,28 @@ internal static class SyntheticTests
     private static void Require(bool condition, string label)
     {
         if (!condition) throw new InvalidDataException("Test failed: " + label);
+    }
+
+    private static void MemoryHosting(string directory)
+    {
+        var original = typeof(SyntheticTests).Assembly;
+        var path = Path.Combine(directory, "assembly copy.dll");
+        File.Copy(original.Location, path);
+        var before = NativeGame.Hash(File.ReadAllBytes(path));
+        var context = new AssemblyLoadContext("synthetic-memory-host", isCollectible: true);
+        try
+        {
+            var loaded = NativeGame.LoadManagedAssembly(context, path,
+                RuntimeInformation.ProcessArchitecture);
+            Require(loaded.Location == "" && loaded.GetName().Name == original.GetName().Name,
+                "Managed hosting uses private memory");
+            Require(NativeGame.Hash(File.ReadAllBytes(path)) == before,
+                "Managed hosting preserves supplied bytes");
+            // Windows must release the input file while the assembly is still loaded
+            File.Delete(path);
+            Require(!File.Exists(path), "Managed hosting leaves no file lock");
+        }
+        finally { context.Unload(); }
     }
 
     private static void ProjectsRoundTrip(string directory)

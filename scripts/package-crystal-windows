@@ -1,0 +1,73 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+
+usage() {
+    cat <<'HELP'
+Usage: scripts/package-crystal-windows [-h|--help]
+Build a portable x64 Crystal Goxel folder from an MSYS2 MINGW64 shell
+
+Requires .NET SDK 10 on PATH, Python 3, SCons, MinGW GCC, GLFW, TRE and zlib
+MSYS2 packages: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw
+  mingw-w64-x86_64-libtre-git mingw-w64-x86_64-zlib scons
+The build restores pinned .NET dependencies from the network
+The package runs offline without MSYS2 or a separate .NET installation
+Game resources are selected separately and are never bundled
+Environment: MSYSTEM=MINGW64 and MINGW_PREFIX are supplied by MSYS2
+Output: dist/Crystal Goxel Windows (generated output is replaced)
+Exit: 0 success/help, 1 build failure, 2 usage/precondition, 3 missing dependency
+HELP
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    --) shift ;;
+esac
+if [ "$#" -ne 0 ]; then usage >&2; exit 2; fi
+if [ "${MSYSTEM:-}" != MINGW64 ] || [ -z "${MINGW_PREFIX:-}" ]; then
+    printf '%s\n' 'Run this command in the MSYS2 MINGW64 shell' >&2
+    exit 2
+fi
+for dependency in scons gcc g++ windres objdump dotnet cygpath python3; do
+    if ! command -v "$dependency" >/dev/null 2>&1; then
+        printf 'Missing dependency: %s\n' "$dependency" >&2
+        exit 3
+    fi
+done
+if [ "$(gcc -dumpmachine)" != x86_64-w64-mingw32 ]; then
+    printf '%s\n' 'The package requires the x64 MinGW compiler' >&2
+    exit 2
+fi
+for library in libglfw3.a libtre.a libz.a; do
+    if [ ! -f "$MINGW_PREFIX/lib/$library" ]; then
+        printf 'Missing static library: %s\n' "$library" >&2
+        exit 3
+    fi
+done
+if ! dotnet --list-sdks | awk '/^10\./ {found=1} END {exit !found}'; then
+    printf '%s\n' 'Missing .NET SDK 10' >&2
+    exit 3
+fi
+project_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$project_root"
+scons -j8 mode=release yocto=0 >&2
+package='dist/Crystal Goxel Windows'
+rm -rf "$package"
+mkdir -p "$package/Bridge" "$package/licenses"
+cp goxel.exe "$package/CrystalGoxel.exe"
+# Pass native paths explicitly so MSYS2 cannot rewrite helper arguments
+MSYS2_ARG_CONV_EXCL='*' dotnet publish bridge/CrystalBridge.csproj \
+    -c Release -r win-x64 --self-contained true -p:RestoreLockedMode=true \
+    --nologo -o "$(cygpath -w "$package/Bridge")" >&2
+cp COPYING "$package/licenses/Goxel-LICENSE.txt"
+cp licenses/GLFW-LICENSE.md "$package/licenses/GLFW-LICENSE.txt"
+cp licenses/TRE-LICENSE.txt "$package/licenses/TRE-LICENSE.txt"
+cp licenses/GCC-COPYING3.txt licenses/GCC-COPYING.RUNTIME.txt \
+    licenses/MINGW-LICENSE.txt "$package/licenses/"
+cp README.md CRYSTAL_BRIDGE.md COPYING AGENTS.md CONTRIBUTING.md "$package/"
+mkdir -p "$package/doc/cla"
+cp doc/UPSTREAM_README.md "$package/doc/"
+cp doc/cla/sign-cla.md "$package/doc/cla/"
+cp licenses/* "$package/licenses/"
+python3 scripts/check-windows-package.py "$package" >&2
+printf '%s/%s\n' "$project_root" "$package"

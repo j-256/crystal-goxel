@@ -19,18 +19,48 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
+          path-type: inherit
           update: true
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw mingw-w64-x86_64-libtre-git mingw-w64-x86_64-libpng scons make git
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw mingw-w64-x86_64-libtre-git mingw-w64-x86_64-zlib scons make git
 
-      - name: Build Goxel
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build Crystal Goxel package
         run: |
-          make release
+          scripts/package-crystal-windows
+
+      - name: Check native helper process contract
+        timeout-minutes: 5
+        run: |
+          mkdir -p build
+          windres -I. src/crystal-windows.rc build/host-manifest.o
+          g++ -std=c++17 -Wall -Wextra -Werror -static \
+            tests/crystal_host_test.cpp src/crystal_host.cpp \
+            build/host-manifest.o -lole32 -o build/crystal-host-test.exe
+          ./build/crystal-host-test.exe --bridge \
+            'dist/Crystal Goxel Windows/Bridge/crystal-bridge.exe'
+
+      - name: Check packaged helper
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'Crystal Goxel 雪 spaces'
+          Copy-Item -LiteralPath 'dist/Crystal Goxel Windows' -Destination $package -Recurse
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & "$package/Bridge/crystal-bridge.exe" test
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged bridge checks failed' }
+            & "$package/CrystalGoxel.exe" --help
+            if ($LASTEXITCODE -ne 0) { throw 'Portable editor launch failed' }
+          } finally { Pop-Location }
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: win_x86_64_binary
-          path: goxel.exe
+          name: crystal-goxel-windows-x64
+          path: dist/Crystal Goxel Windows/
           if-no-files-found: error
 
   linux_x86_64:

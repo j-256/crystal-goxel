@@ -15,6 +15,7 @@ extern "C" {
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include "crystal_host.h"
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -26,10 +27,6 @@ extern "C" {
 #include <string>
 #include <thread>
 #include <vector>
-#ifndef WIN32
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
 
 namespace {
 constexpr uint8_t TOKEN_SIGNATURE = 0xc7;
@@ -177,7 +174,7 @@ std::string read_file(const std::filesystem::path &path,
                       size_t limit = MAX_ASSET)
 {
     std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("Cannot read " + path.string());
+    if (!input) throw std::runtime_error("Cannot read " + path.u8string());
     input.seekg(0, std::ios::end);
     auto length = input.tellg();
     if (length < 0 || static_cast<size_t>(length) > limit)
@@ -318,76 +315,13 @@ Json helper_report(const std::string &output)
     return parse(output.substr(0, output.find('\n')));
 }
 
+using Temporary = crystal_host::Temporary;
+
 std::string run_helper(const std::vector<std::string> &arguments,
                        const std::string &executable = helper)
 {
-#ifdef WIN32
-    throw std::runtime_error(
-            "This prototype's helper launcher requires macOS or Linux");
-#else
-    if (executable.empty())
-        throw std::runtime_error(
-                "Set --crystal-helper to the crystal-bridge executable");
-    int output[2];
-    if (pipe(output))
-        throw std::runtime_error("Cannot open the helper output pipe");
-    std::vector<char *> argv{ const_cast<char *>(executable.c_str()) };
-    for (const auto &arg : arguments)
-        argv.push_back(const_cast<char *>(arg.c_str()));
-    argv.push_back(nullptr);
-    auto pid = fork();
-    if (pid == 0) {
-        close(output[0]);
-        dup2(output[1], STDOUT_FILENO);
-        dup2(output[1], STDERR_FILENO);
-        close(output[1]);
-        execv(executable.c_str(), argv.data());
-        _exit(127);
-    }
-    close(output[1]);
-    if (pid < 0) {
-        close(output[0]);
-        throw std::runtime_error("Cannot start helper");
-    }
-    std::string result;
-    char buffer[2048];
-    ssize_t length;
-    while ((length = read(output[0], buffer, sizeof(buffer))) > 0) {
-        if (result.size() < 65536) result.append(buffer, length);
-    }
-    close(output[0]);
-    int code = 0;
-    while (waitpid(pid, &code, 0) < 0 && errno == EINTR) {
-    }
-    if (!WIFEXITED(code) || WEXITSTATUS(code) != 0)
-        throw std::runtime_error(
-                result.empty() ? "Helper failed to start" : result);
-    return result;
-#endif
+    return crystal_host::run(executable, arguments);
 }
-
-struct Temporary {
-    std::filesystem::path directory;
-    Temporary()
-    {
-#ifdef WIN32
-        throw std::runtime_error(
-                "Temporary helper workspace is unavailable on this platform");
-#else
-        std::string pattern = (std::filesystem::temp_directory_path() /
-                               "crystal-goxel-ui-XXXXXX")
-                                      .string();
-        auto *path = mkdtemp(pattern.data());
-        if (!path) throw std::runtime_error("Cannot create helper workspace");
-        directory = path;
-#endif
-    }
-    ~Temporary()
-    {
-        std::error_code error;
-        std::filesystem::remove_all(directory, error);
-    }
-};
 
 Model model(const std::vector<model_vertex_t> &vertices)
 {
@@ -638,8 +572,8 @@ PreparedTerrain prepare_terrain(const std::string &context,
     auto path = temp.directory / "view.json";
     run_helper({ prefetch ? "prefetch" : "tiles", "--context", context,
                  "--min", triple(min), "--max", triple(max),
-                 "--output", path.string() }, executable);
-    return read_prepared(path.string(), min, max, cache, prefetch);
+                 "--output", path.u8string() }, executable);
+    return read_prepared(path.u8string(), min, max, cache, prefetch);
 }
 
 void trim_terrain_cache(State &saved, size_t byte_limit, size_t tile_limit)
@@ -768,7 +702,7 @@ void load_native_locations(State &saved)
 {
     try {
         Temporary work;
-        auto output = (work.directory / "locations.json").string();
+        auto output = (work.directory / "locations.json").u8string();
         run_helper({ "locations", "--context", saved.path,
                      "--output", output });
         auto root = parse(read_file(output, MAX_LOCATION_BYTES));
@@ -988,7 +922,7 @@ void import_project(const char *path)
     Temporary temp;
     auto snapshot = temp.directory / "snapshot.json";
     auto report = run_helper({ "import", "--context", state->path, "--source",
-                               path, "--output", snapshot.string() });
+                               path, "--output", snapshot.u8string() });
     auto result = helper_report(report);
     auto root = parse(read_file(snapshot, MAX_STATE));
     const auto &cells = (*root)["cells"];
@@ -1050,7 +984,7 @@ void export_project(const char *path)
     if (state->tiled) {
         auto allocated = temp.directory / "allocated.json";
         run_helper({ "allocate", "--context", state->path, "--snapshot",
-                     snapshot.string(), "--output", allocated.string() });
+                     snapshot.u8string(), "--output", allocated.u8string() });
         auto root = parse(read_file(allocated, MAX_STATE));
         State metadata;
         metadata.path = state->path;
@@ -1064,7 +998,7 @@ void export_project(const char *path)
         metadata.identities = serialize(&(*root)["identities"]);
         saved_data(metadata);
         run_helper({ "export", "--context", state->path,
-                     "--snapshot", allocated.string(), "--output", path });
+                     "--snapshot", allocated.u8string(), "--output", path });
         state->source = std::move(metadata.source);
         state->identities = std::move(metadata.identities);
         update_metadata_key(*state);
@@ -1072,7 +1006,7 @@ void export_project(const char *path)
         return;
     }
     run_helper({ "export", "--context", state->path, "--snapshot",
-                 snapshot.string(), "--output", path });
+                 snapshot.u8string(), "--output", path });
     status = "Exported Crystal Edit project to " + std::string(path);
 }
 
@@ -1212,7 +1146,7 @@ bool pick_ray(
 
 extern "C" void crystal_set_helper(const char *path)
 {
-    helper = path ? path : "";
+    helper = path && *path ? path : crystal_host::bundled_helper();
 }
 extern "C" bool crystal_active(void)
 {
@@ -1556,7 +1490,8 @@ extern "C" bool crystal_load(const char *path, bool frame)
 {
     try {
         auto next = std::make_unique<State>();
-        next->path = std::filesystem::absolute(path).string();
+        next->path = std::filesystem::absolute(
+                std::filesystem::u8path(path)).u8string();
         next->manifest = read_file(next->path, MAX_STATE);
         auto root = parse(next->manifest);
         run_helper({ "validate", "--context", next->path });
@@ -1577,7 +1512,7 @@ extern "C" bool crystal_load(const char *path, bool frame)
                                      number(block["maxVariant"]),
                                      string(block["name"]) });
         }
-        auto directory = std::filesystem::path(next->path).parent_path();
+        auto directory = std::filesystem::u8path(next->path).parent_path();
         auto data = read_file(directory / "palette.mesh");
         size_t offset = 4;
         if (data.substr(0, 4) != "CGP1")
@@ -1593,7 +1528,7 @@ extern "C" bool crystal_load(const char *path, bool frame)
                         "Invalid or duplicate native block template");
         }
         int bpp = 4;
-        auto atlas_path = (directory / "atlas.png").string();
+        auto atlas_path = (directory / "atlas.png").u8string();
         auto *pixels = img_read(atlas_path.c_str(), &next->atlas_w,
                                 &next->atlas_h, &bpp);
         if (!pixels || bpp != 4 || next->atlas_w != 432 ||
@@ -1737,8 +1672,8 @@ extern "C" void crystal_panel(void)
                             "Select the game and a new cache folder");
                 run_helper({ "world", "--game", installation_input,
                              "--output", cache_input });
-                auto path = std::filesystem::path(cache_input) / "world.json";
-                crystal_load(path.string().c_str(), true);
+                auto path = std::filesystem::u8path(cache_input) / "world.json";
+                crystal_load(path.u8string().c_str(), true);
             }
             catch (const std::exception &error) {
                 status = error.what();
@@ -1973,7 +1908,7 @@ void wait_terrain_job()
 void native_locations_smoke()
 {
     auto path = state->path;
-    auto catalog_path = std::filesystem::path(path).parent_path() /
+    auto catalog_path = std::filesystem::u8path(path).parent_path() /
                         "locations.json";
     auto original = read_file(catalog_path);
     auto saved = saved_data(*state);
@@ -2111,10 +2046,10 @@ void height_navigation_smoke()
     auto ceiling = (tile_index(99) + VIEW_TILE_RADIUS + 1) * NATIVE_TILE_EDGE;
     std::array<int, 3> next{ 1, ceiling, 1 }, end{ 2, ceiling + 1, 2 };
     run_helper({ "tiles", "--context", state->path, "--min", triple(next),
-                 "--max", triple(end), "--output", prepared.string() });
+                 "--max", triple(end), "--output", prepared.u8string() });
     auto tile = parse(read_file(prepared, MAX_STATE));
     auto mesh_path =
-            std::filesystem::path(string((*tile)["tiles"][0]["path"])) /
+            std::filesystem::u8path(string((*tile)["tiles"][0]["path"])) /
             "reference.mesh";
     {
         struct RestoreAsset {
@@ -2462,10 +2397,10 @@ void world_smoke(const char *output)
     Temporary temp;
     auto prepared = temp.directory / "neighbor.json";
     run_helper({ "tiles", "--context", state->path, "--min", triple(neighbor),
-                 "--max", triple(end), "--output", prepared.string() });
+                 "--max", triple(end), "--output", prepared.u8string() });
     auto tile = parse(read_file(prepared, MAX_STATE));
     auto mesh_path =
-            std::filesystem::path(string((*tile)["tiles"][0]["path"])) /
+            std::filesystem::u8path(string((*tile)["tiles"][0]["path"])) /
             "reference.mesh";
     struct RestoreAsset {
         std::filesystem::path path;

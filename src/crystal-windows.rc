@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Goxel and its image libraries use narrow file APIs with UTF-8 dialog paths
+1 24 "src/crystal-windows.manifest"

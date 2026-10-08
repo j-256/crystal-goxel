@@ -392,6 +392,7 @@ static bool open_dialog(
 
 int main(int argc, char **argv)
 {
+    const int startup_failure = 2;
     args_t args = {.scale = 1};
     GLFWwindow *window;
     GLFWmonitor *monitor;
@@ -411,7 +412,7 @@ int main(int argc, char **argv)
     g_scale = args.scale;
 
     glfwSetErrorCallback(on_glfw_error);
-    glfwInit();
+    if (!glfwInit()) return startup_failure;
     glfwWindowHint(GLFW_SAMPLES, 4);
     glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
     if (args.crystal_smoke) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -426,12 +427,14 @@ int main(int argc, char **argv)
             height = mode->height ?: 480;
         }
         window = glfwCreateWindow(width, height, "Crystal Goxel", NULL, NULL);
-        assert(window);
-        glfwSetWindowPos(window, 0, 0);
+        if (window) glfwSetWindowPos(window, 0, 0);
     } else {
         glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
         window = glfwCreateWindow(width, height, "Crystal Goxel", NULL, NULL);
-        assert(window);
+    }
+    if (!window) {
+        glfwTerminate();
+        return startup_failure;
     }
 
     sys_callbacks.user = window;
@@ -446,7 +449,15 @@ int main(int argc, char **argv)
     set_window_icon(window);
 
 #ifdef WIN32
-    glewInit();
+    // Basic Windows display drivers expose GL 1.1 without the renderer APIs
+    if (glewInit() != GLEW_OK || !GLEW_VERSION_2_1 ||
+        !(GLEW_VERSION_3_0 || GLEW_ARB_framebuffer_object)) {
+        fprintf(stderr, "Crystal Goxel requires OpenGL 2.1 with framebuffer "
+                "support; install a graphics driver with OpenGL support\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return startup_failure;
+    }
 #endif
     goxel_init();
 

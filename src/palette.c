@@ -60,16 +60,16 @@ void palette_insert(palette_t *p, const uint8_t col[4], const char *name)
 }
 
 
-// Parse a gimp palette.
+// Parse a Gimp palette
 // XXX: we don't check for buffer overflow!
 static int parse_gpl(const char *data, char *name, int *columns,
                      palette_entry_t *entries)
 {
     const char *start, *end;
-    int linen, r, g, b, nb = 0;
+    int r, g, b, nb = 0;
     char entry_name[128];
 
-    for (linen = 1, start = data; *start; start = end + 1, linen++) {
+    for (start = data; *start; start = end + 1) {
         end = strchr(start, '\n');
         if (!end) end = start + strlen(start);
 
