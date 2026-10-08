@@ -22,6 +22,7 @@
 
 extern "C" {
 #include "goxel.h"
+#include "crystal.h"
 #include "utils/color.h"
 
 void gui_app(void);
@@ -721,6 +722,8 @@ static void gui_iter(const inputs_t *inputs)
 
     gui_app();
     render_popups(0);
+    crystal_height_shortcut(inputs, !io.WantCaptureKeyboard &&
+                                   !io.WantCaptureMouse);
 
     // Handle the shortcuts.  XXX: this should be done with actions.
     if (ImGui::IsKeyPressed((ImGuiKey)KEY_DELETE, false))

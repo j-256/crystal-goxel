@@ -25,6 +25,8 @@ bool crystal_pick(const camera_t *camera,
 bool crystal_prepare_edit(const float box[4][4]);
 bool crystal_prepare_preview(const float box[4][4]);
 void crystal_follow_view(const camera_t *camera);
+bool crystal_step_height(int direction);
+void crystal_height_shortcut(const inputs_t *inputs, bool allowed);
 bool crystal_reference_bounds(float box[4][4]);
 void crystal_panel(void);
 void crystal_show_panel(void);

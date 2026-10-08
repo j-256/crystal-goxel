@@ -44,6 +44,7 @@ constexpr int MAX_PREFETCH_TILES = 343;
 constexpr size_t MAX_CACHED_BYTES = 64 * 1024 * 1024;
 constexpr size_t MAX_CACHED_TILES = 1024;
 constexpr int CAMERA_EDGE_MARGIN = NATIVE_TILE_EDGE;
+constexpr float CAMERA_POSITION_EPSILON = .001f;
 constexpr int WORLD_EXTENT = 10000;
 constexpr int WORLD_HEIGHT = 256;
 constexpr unsigned MAX_BOOKMARKS = 64;
@@ -121,6 +122,8 @@ struct State {
     std::string prefetch_error;
     bool tiled = false;
     bool follow_view = true;
+    int height_step = NATIVE_TILE_EDGE;
+    bool height_up_pressed = false, height_down_pressed = false;
     std::vector<NativeLocation> locations;
     std::string locations_error;
     char location_search[128] = {};
@@ -1486,6 +1489,69 @@ extern "C" void crystal_follow_view(const camera_t *camera)
     }
 }
 
+extern "C" bool crystal_step_height(int direction)
+{
+    if (!state || !state->tiled || !goxel.image->active_camera ||
+        (direction != -1 && direction != 1)) return false;
+    auto *camera = goxel.image->active_camera;
+    try {
+        float target[3];
+        mat4_mul_vec3(camera->mat, VEC(0, 0, -camera->dist), target);
+        for (float value : target)
+            if (!std::isfinite(value) || std::abs(value) > WORLD_EXTENT)
+                throw std::runtime_error("Camera target exceeds world bounds");
+        auto step = std::clamp(state->height_step, 1, WORLD_HEIGHT - 1);
+        auto height = std::clamp(target[2] + direction * step,
+                                 .5f, WORLD_HEIGHT - .5f);
+        if (std::abs(height - target[2]) < CAMERA_POSITION_EPSILON) {
+            status = direction > 0 ? "Highest world height reached." :
+                                     "Lowest world height reached.";
+            return false;
+        }
+        std::array<int, 3> center{
+            int(std::floor(target[0])), int(std::floor(height)),
+            int(std::floor(-target[1]))
+        };
+        // Prepare first so a load failure leaves the view and camera intact
+        visit_location(center, false);
+        // Goxel Z is game Height Y; world translation preserves the orbit pose
+        camera->mat[3][2] += height - target[2];
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = nullptr;
+        status = "Height loaded. Viewing angle and zoom preserved.";
+        return true;
+    }
+    catch (const std::exception &error) {
+        status = "Height change failed: " + std::string(error.what());
+        fprintf(stderr, "crystal-goxel height: document=%llu result=error "
+                "message=%s\n", (unsigned long long)state->document,
+                error.what());
+        return false;
+    }
+}
+
+extern "C" void crystal_height_shortcut(const inputs_t *inputs, bool allowed)
+{
+    if (!state || !state->tiled || !inputs) return;
+    bool up = inputs->keys[KEY_PAGE_UP], down = inputs->keys[KEY_PAGE_DOWN];
+    bool pressed = (up && !state->height_up_pressed) ||
+                   (down && !state->height_down_pressed);
+    // Remember blocked presses so leaving a text field cannot trigger a jump
+    state->height_up_pressed = up;
+    state->height_down_pressed = down;
+    if (!allowed || !pressed || up == down) return;
+    for (bool button : inputs->touches[0].down)
+        if (button) return;
+    if (inputs->keys[KEY_LEFT_CONTROL] || inputs->keys[KEY_RIGHT_CONTROL] ||
+        inputs->keys[KEY_LEFT_ALT] || inputs->keys[KEY_RIGHT_ALT] ||
+        inputs->keys[KEY_LEFT_SUPER] || inputs->keys[KEY_RIGHT_SUPER] ||
+        inputs->keys[KEY_LEFT_SHIFT] || inputs->keys[KEY_RIGHT_SHIFT]) return;
+    const auto &pos = inputs->touches[0].pos;
+    if (pos[0] < 0 || pos[1] < 0 || pos[0] >= goxel.screen_size[0] ||
+        pos[1] >= goxel.screen_size[1]) return;
+    crystal_step_height(up ? 1 : -1);
+}
+
 extern "C" bool crystal_load(const char *path, bool frame)
 {
     try {
@@ -1711,6 +1777,17 @@ extern "C" void crystal_panel(void)
                 if (gui_button("Go to location", 0, 0))
                     visit_location({ location_input[0], location_input[1],
                                      location_input[2] }, true);
+                gui_input_int("Height step", &state->height_step,
+                              1, WORLD_HEIGHT - 1);
+                gui_row_begin(2);
+                bool up = gui_button("Move up", 0, 0);
+                bool down = gui_button("Move down", 0, 0);
+                gui_row_end();
+                if (up || down) crystal_step_height(up ? 1 : -1);
+                gui_text_wrapped("Move vertically by the height step in "
+                                 "blocks. Page Up / Page Down over the world "
+                                 "also move up / down.");
+                gui_text_wrapped("Game Height Y is Goxel's vertical Z axis.");
                 gui_text("Visible terrain tiles: %zu", state->tiles.size());
                 gui_text_wrapped("View: %d x %d x %d blocks", state->size[0],
                                  state->size[1], state->size[2]);
@@ -1943,6 +2020,141 @@ void cache_eviction_smoke()
                 "Terrain cache count or byte accounting failed");
 }
 
+void height_navigation_smoke()
+{
+    auto authored = cells_json(), metadata = saved_data(*state);
+    auto center = state->center;
+    auto *camera = goxel.image->active_camera;
+    float original[4][4];
+    mat4_copy(camera->mat, original);
+    auto distance = camera->dist;
+    auto ortho = camera->ortho, follow = state->follow_view;
+    auto step = state->height_step;
+    state->follow_view = false;
+    state->height_step = NATIVE_TILE_EDGE;
+    auto require = [](bool condition, const char *message) {
+        if (!condition) throw std::runtime_error(message);
+    };
+    auto target_height = [&]() {
+        float target[3];
+        mat4_mul_vec3(camera->mat, VEC(0, 0, -camera->dist), target);
+        return target[2];
+    };
+    for (bool tilted : { false, true }) {
+        visit_location({ 1, 99, 1 }, false);
+        mat4_set_identity(camera->mat);
+        camera->dist = 128;
+        camera->ortho = tilted;
+        mat4_itranslate(camera->mat, 1.25f, -1.75f, 99.5f + camera->dist);
+        if (tilted) camera_turntable(camera, .4f, .6f);
+        float pose[4][4], expected[4][4];
+        mat4_copy(camera->mat, pose);
+        mat4_copy(pose, expected);
+        expected[3][2] += NATIVE_TILE_EDGE;
+        require(crystal_step_height(1) && mat4_equal(camera->mat, expected) &&
+                state->center == std::array<int, 3>{ 1, 115, 1 } &&
+                camera->dist == 128 && camera->ortho == tilted &&
+                cells_json() == authored && !state->follow_view,
+                "Vertical movement lost its world axis or orbit pose");
+        require(crystal_step_height(-1) && mat4_equal(camera->mat, pose) &&
+                state->center == std::array<int, 3>{ 1, 99, 1 },
+                "Vertical return changed horizontal position or zoom");
+    }
+    state->height_step = 1;
+    require(crystal_step_height(1) &&
+            state->center == std::array<int, 3>{ 1, 100, 1 } &&
+            crystal_step_height(-1), "Fine height navigation lost a cell");
+    state->height_step = NATIVE_TILE_EDGE;
+    inputs_t input = {};
+    input.window_size[0] = 1024; input.window_size[1] = 768;
+    input.scale = 1;
+    input.touches[0].pos[0] = 800; input.touches[0].pos[1] = 400;
+    auto frame = [&]() { goxel_iter(&input); goxel_render(&input); };
+    frame(); frame();
+    input.keys[KEY_PAGE_UP] = true;
+    frame(); frame();
+    require(state->center == std::array<int, 3>{ 1, 115, 1 },
+            "Page Up failed or repeated while held in the viewport");
+    input.keys[KEY_PAGE_UP] = false;
+    frame();
+    input.keys[KEY_PAGE_DOWN] = true;
+    frame(); frame();
+    require(state->center == std::array<int, 3>{ 1, 99, 1 },
+            "Page Down failed to return through GUI input dispatch");
+    input.keys[KEY_PAGE_DOWN] = false;
+    crystal_height_shortcut(&input, true);
+    input.keys[KEY_PAGE_UP] = true;
+    crystal_height_shortcut(&input, false);
+    crystal_height_shortcut(&input, true);
+    require(state->center == std::array<int, 3>{ 1, 99, 1 },
+            "Captured height keys activated after leaving the UI");
+    input.keys[KEY_PAGE_UP] = false;
+    crystal_height_shortcut(&input, true);
+    input.keys[KEY_PAGE_UP] = true;
+    input.touches[0].down[0] = true;
+    crystal_height_shortcut(&input, true);
+    require(state->center == std::array<int, 3>{ 1, 99, 1 },
+            "Height shortcut interrupted a mouse gesture");
+    input.touches[0].down[0] = false;
+    input.keys[KEY_PAGE_UP] = false;
+    crystal_height_shortcut(&input, true);
+    input.keys[KEY_PAGE_UP] = true;
+    input.keys[KEY_LEFT_SUPER] = true;
+    crystal_height_shortcut(&input, true);
+    require(state->center == std::array<int, 3>{ 1, 99, 1 },
+            "Modified Page Up moved the camera");
+    input.keys[KEY_PAGE_UP] = false;
+    input.keys[KEY_LEFT_SUPER] = false;
+    crystal_height_shortcut(&input, true);
+    Temporary temporary;
+    auto prepared = temporary.directory / "height-tile.json";
+    auto ceiling = (tile_index(99) + VIEW_TILE_RADIUS + 1) * NATIVE_TILE_EDGE;
+    std::array<int, 3> next{ 1, ceiling, 1 }, end{ 2, ceiling + 1, 2 };
+    run_helper({ "tiles", "--context", state->path, "--min", triple(next),
+                 "--max", triple(end), "--output", prepared.string() });
+    auto tile = parse(read_file(prepared, MAX_STATE));
+    auto mesh_path =
+            std::filesystem::path(string((*tile)["tiles"][0]["path"])) /
+            "reference.mesh";
+    {
+        struct RestoreAsset {
+            std::filesystem::path path;
+            std::string bytes;
+            ~RestoreAsset() { std::ofstream(path, std::ios::binary) << bytes; }
+        } restore{ mesh_path, read_file(mesh_path) };
+        float pose[4][4];
+        mat4_copy(camera->mat, pose);
+        auto reference = state->reference.get();
+        auto saved = saved_data(*state);
+        std::ofstream(mesh_path, std::ios::binary | std::ios::app) << "tamper";
+        require(!crystal_step_height(1) &&
+                status.find("Height change failed") != std::string::npos &&
+                mat4_equal(camera->mat, pose) &&
+                state->reference.get() == reference &&
+                saved_data(*state) == saved && cells_json() == authored,
+                "Failed height loading changed the camera or document");
+    }
+    require(crystal_step_height(1) && crystal_step_height(-1),
+            "Height loading did not recover after cache repair");
+    state->height_step = WORLD_HEIGHT - 1;
+    require(crystal_step_height(-1) &&
+            std::abs(target_height() - .5f) < CAMERA_POSITION_EPSILON &&
+            state->center[1] == 0 && !crystal_step_height(-1),
+            "Height navigation crossed the lower world boundary");
+    require(crystal_step_height(1) &&
+            std::abs(target_height() - (WORLD_HEIGHT - .5f)) <
+                CAMERA_POSITION_EPSILON &&
+            state->center[1] == WORLD_HEIGHT - 1 &&
+            !crystal_step_height(1),
+            "Height navigation crossed the upper world boundary");
+    visit_location(center, false);
+    mat4_copy(original, camera->mat);
+    camera->dist = distance; camera->ortho = ortho;
+    state->follow_view = follow; state->height_step = step;
+    require(cells_json() == authored && saved_data(*state) == metadata,
+            "Height navigation changed authored work or project bookmarks");
+}
+
 void benchmark_views()
 {
     constexpr int BASELINE_RADIUS = 1;
@@ -2001,6 +2213,7 @@ void world_smoke(const char *output)
     if (!state->tiled) return;
     wait_terrain_job();
     cache_eviction_smoke();
+    height_navigation_smoke();
     state->follow_view = false;
     if (state->size != std::array<int, 3>{ 80, 80, 80 } ||
         state->tiles.size() != MAX_VIEW_TILES)
@@ -2329,6 +2542,7 @@ void world_smoke(const char *output)
            "boundaryShape=ok cameraFollow=ok prefetch=ok hover=ok smallPan=ok "
            "memoryReuse=ok cacheEviction=ok staleNavigation=ok "
            "documentReset=ok prefetchRecovery=ok mousePan=ok "
+           "heightNavigation=ok "
            "undoRedo=ok bookmarks=ok nativeLocations=ok "
            "persistence=ok combinedExport=ok "
            "stableIdentities=ok failedStrokeAtomicity=ok\n");
