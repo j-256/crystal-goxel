@@ -9,6 +9,7 @@ internal sealed class TiledContext : IDisposable
     internal const int Format = 2;
     internal const int TileSize = 16;
     internal const int MaxViewTiles = 125;
+    internal const int ViewTileRadius = 2;
     internal const int WorldExtent = 10000;
     internal static readonly int[] DocumentOrigin = [0, 0, 0];
     internal static readonly string[] SharedFiles = ["atlas.png", "palette.mesh"];
@@ -53,8 +54,8 @@ internal sealed class TiledContext : IDisposable
     {
         if (!Inside(center)) throw new ArgumentException("Location exceeds supported world bounds");
         var key = Key(center);
-        var min = key.Select(k => (k - 1) * TileSize).ToArray();
-        var max = key.Select(k => (k + 2) * TileSize).ToArray();
+        var min = key.Select(k => (k - ViewTileRadius) * TileSize).ToArray();
+        var max = key.Select(k => (k + ViewTileRadius + 1) * TileSize).ToArray();
         min[0] = Math.Max(min[0], -WorldExtent); max[0] = Math.Min(max[0], WorldExtent + 1);
         min[1] = Math.Max(min[1], 0); max[1] = Math.Min(max[1], 256);
         min[2] = Math.Max(min[2], -WorldExtent); max[2] = Math.Min(max[2], WorldExtent + 1);

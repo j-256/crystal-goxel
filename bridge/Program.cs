@@ -23,7 +23,8 @@ Short options: -g game, -c center, -s size, -o output, -k context,
 -i source/snapshot, -h help. Short values can be glued to their option.
 Tile bounds are game coordinates, with an inclusive minimum and exclusive maximum.
 World caches use format 2, native-aligned 16-cell tiles and shared fingerprinted assets.
-view prepares the neighboring tiles around a location; tiles prepares up to 125 tiles.
+view prepares an 80-cell cube around a location, clipped at world edges.
+tiles prepares up to 125 tiles per request.
 No environment variables are required. Native operations need the supported game;
 synthetic tests and validation of existing cache files do not need it.
 Exit status: 0 success, 1 runtime failure, 2 usage/precondition, 3 missing dependency

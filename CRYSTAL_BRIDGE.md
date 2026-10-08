@@ -27,7 +27,7 @@ Create a world cache from your own Windows game installation. Choose a new priva
 
 You can also use Create tiled world in the Crystal Project panel: choose the Windows game folder and a new cache folder, then create the cache. It stores shared palette assets and a fingerprinted `world.json`, with terrain tiles added as needed. No scene export from the running game is required. Native resources are read directly from the selected installation.
 
-A tiled document uses global game coordinates and holds every authored location in one `.gox` project. World X and World Z are horizontal; Height Y is vertical. Go to location loads neighboring native tiles and frames that location. Save named locations to return to them from the panel. Follow camera loads terrain around the camera's orbit target as you pan. Changing the view replaces reference geometry while preserving all authored layers, offscreen edits, original imported entities and entity ID reservations.
+A tiled document uses global game coordinates and holds every authored location in one `.gox` project. World X and World Z are horizontal; Height Y is vertical. Go to location loads an 80 x 80 x 80 block neighborhood and frames that location. The panel shows the loaded dimensions, which shrink at supported world edges. Save named locations to return to them from the panel. Follow camera loads terrain around the camera's orbit target as you pan. Changing the view replaces reference geometry while preserving all authored layers, offscreen edits, original imported entities and entity ID reservations.
 
 The initial location `(1, 99, 1)` is the vanilla new-game starting floor. The native Spawn Point marker is `(1, 110, 1)`; field setup moves the player down to the ground before play starts. Randomizer redirects and existing saves can start elsewhere. Supported authored coordinates span X and Z from -10000 through 10000 and Y from 0 through 255.
 
@@ -78,6 +78,8 @@ The GPU smoke check creates a hidden GLFW window on a graphical desktop. It requ
 For a tiled context it also checks a mouse stroke and shape across a tile edge, undo/redo, an edit at a distant location, camera-follow loading, saved locations, whole-document save/reopen, stable repeated exports and a corrupted neighboring tile that cancels a gesture without changing content or the active view. These location fixtures use the supported vanilla world.
 
 The smoke output includes a PNG, `.png.gox` project and `.png.json` Crystal Edit source, plus imported-project round-trip artifacts. Tiled checks add `.png.world.gox`, `.png.world.json`, repeated-export JSON and a world-view PNG. Use a new basename for each run. Missing-context and save-limit diagnostics are expected during this check.
+
+Tiled smoke runs compare 48-block and 80-block views at the starting area and Meadows. Their `view-benchmark` lines report tile preparation, native mesh vertices, static render/readback time and CPU terrain picking. Rendering produces a 1024 x 768 image through Goxel's supersampled export path, including GPU readback and downsampling; it does not measure interactive frame rate. Preparation timings depend on whether the requested tiles are already cached.
 
 Check exported entity data with the installed Crystal Edit serializer and the game's binary entity reader:
 

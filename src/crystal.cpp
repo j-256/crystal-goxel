@@ -12,6 +12,7 @@ extern "C" {
 #include "../ext_src/json/json.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -34,10 +35,14 @@ constexpr size_t MAX_STATE = CRYSTAL_MAX_STATE;
 constexpr size_t MAX_PREVIEW_VERTICES = 4'000'000;
 constexpr int NATIVE_TILE_EDGE = 16;
 constexpr int MAX_VIEW_TILES = 125;
+constexpr int VIEW_TILE_RADIUS = 2;
 constexpr int WORLD_EXTENT = 10000;
 constexpr int WORLD_HEIGHT = 256;
 constexpr unsigned MAX_BOOKMARKS = 64;
 constexpr char DEFAULT_EXPORT_NAME[] = "crystal-project.json";
+static_assert((VIEW_TILE_RADIUS * 2 + 1) * (VIEW_TILE_RADIUS * 2 + 1) *
+              (VIEW_TILE_RADIUS * 2 + 1) <= MAX_VIEW_TILES,
+              "Navigation must fit the tile preparation limit");
 using Json = std::unique_ptr<json_value, decltype(&json_value_free)>;
 using Model = std::unique_ptr<model3d_t, decltype(&model3d_delete)>;
 struct Block {
@@ -500,8 +505,9 @@ void location_view(State &saved, const std::array<int, 3> &center)
     check_location(center);
     std::array<int, 3> min, max;
     for (int k = 0; k < 3; k++) {
-        min[k] = (tile_index(center[k]) - 1) * NATIVE_TILE_EDGE;
-        max[k] = (tile_index(center[k]) + 2) * NATIVE_TILE_EDGE;
+        min[k] = (tile_index(center[k]) - VIEW_TILE_RADIUS) * NATIVE_TILE_EDGE;
+        max[k] = (tile_index(center[k]) + VIEW_TILE_RADIUS + 1) *
+                 NATIVE_TILE_EDGE;
     }
     min[0] = std::max(min[0], -WORLD_EXTENT);
     max[0] = std::min(max[0], WORLD_EXTENT + 1);
@@ -1197,6 +1203,8 @@ extern "C" void crystal_panel(void)
                     visit_location({ location_input[0], location_input[1],
                                      location_input[2] }, true);
                 gui_text("Loaded terrain tiles: %zu", state->tiles.size());
+                gui_text_wrapped("View: %d x %d x %d blocks", state->size[0],
+                                 state->size[1], state->size[2]);
                 gui_checkbox("Follow camera", &state->follow_view,
                              "Prepare terrain when the camera moves");
                 gui_text_wrapped("All locations share this mod. Brushes and "
@@ -1356,10 +1364,67 @@ extern "C" void crystal_restore_state(const char *data, size_t size)
 }
 
 namespace {
+void benchmark_views()
+{
+    constexpr int BASELINE_RADIUS = 1;
+    constexpr int RENDER_SAMPLES = 24;
+    constexpr int PICK_SAMPLES = 128;
+    constexpr int WIDTH = 1024;
+    constexpr int HEIGHT = 768;
+    using Clock = std::chrono::steady_clock;
+    auto elapsed = [](Clock::time_point start) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - start)
+                .count();
+    };
+    auto authored = cells_json();
+    std::vector<uint8_t> pixels(WIDTH * HEIGHT * 4);
+    for (int radius : { BASELINE_RADIUS, VIEW_TILE_RADIUS }) {
+        std::array<int, 3> min, max;
+        for (int k = 0; k < 3; k++) {
+            auto key = tile_index(state->center[k]);
+            min[k] = (key - radius) * NATIVE_TILE_EDGE;
+            max[k] = (key + radius + 1) * NATIVE_TILE_EDGE;
+        }
+        auto start = Clock::now();
+        prepare_view(*state, min, max);
+        double prepare_ms = elapsed(start);
+        float box[4][4];
+        view_box(*state, box);
+        camera_fit_box(goxel.image->active_camera, box);
+        goxel_render_to_buf(pixels.data(), WIDTH, HEIGHT, 4);
+        // Readback waits for GPU work; this measures static export rendering
+        start = Clock::now();
+        for (int i = 0; i < RENDER_SAMPLES; i++)
+            goxel_render_to_buf(pixels.data(), WIDTH, HEIGHT, 4);
+        double render_ms = elapsed(start) / RENDER_SAMPLES;
+        float origin[3] = { state->center[0] + .5f,
+                            -state->center[2] - .5f,
+                            float(state->view_max[1] + 10) };
+        float down[3] = { 0, 0, -1 }, hit[3], normal[3];
+        start = Clock::now();
+        for (int i = 0; i < PICK_SAMPLES; i++)
+            if (!pick_ray(origin, down, hit, normal))
+                throw std::runtime_error("View benchmark lost floor picking");
+        double pick_ms = elapsed(start) / PICK_SAMPLES;
+        printf("crystal-goxel view-benchmark: location=%s edge=%d tiles=%zu "
+               "nativeVertices=%d prepareMs=%.2f "
+               "renderReadback1024x768Ms=%.2f pickMs=%.3f\n",
+               triple(state->center).c_str(), state->size[0],
+               state->tiles.size(), state->reference->nb_vertices,
+               prepare_ms, render_ms, pick_ms);
+    }
+    if (cells_json() != authored)
+        throw std::runtime_error("Changing view size affected authored content");
+}
+
 void world_smoke(const char *output)
 {
     if (!state->tiled) return;
     state->follow_view = false;
+    if (state->size != std::array<int, 3>{ 80, 80, 80 } ||
+        state->tiles.size() != MAX_VIEW_TILES)
+        throw std::runtime_error("Navigation did not load the full-size view");
+    benchmark_views();
     goxel.painter.mode = MODE_OVER;
     goxel.tool_radius = .5f;
     inputs_t input = {};
@@ -1517,7 +1582,8 @@ void world_smoke(const char *output)
 
     // Force a neighboring cache failure after a successful drag segment
     frame();
-    point(115, -18, hit); frame(); frame();
+    point(state->view_max[0] - NATIVE_TILE_EDGE, state->center[2], hit);
+    frame(); frame();
     std::array<int, 3> neighbor{
         state->view_max[0], int(std::floor(hit[2])), state->center[2]
     };
@@ -1551,6 +1617,7 @@ void world_smoke(const char *output)
         throw std::runtime_error(
                 "Failed boundary loading committed a partial stroke or view");
     failed_tile_request.clear();
+    benchmark_views();
     std::vector<uint8_t> pixels(1024 * 768 * 4);
     goxel_render_to_buf(pixels.data(), 1024, 768, 4);
     img_write(pixels.data(), 1024, 768, 4,

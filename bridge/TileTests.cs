@@ -60,6 +60,15 @@ internal static class TileTests
         Require(TiledContext.Keys([-1, 5, 0], [1, 6, 1]).Count == 2 &&
             TiledContext.Keys([-16, 0, 0], [0, 16, 16]).Count == 1,
             "adjacent tiles have disjoint ownership and exclusive upper bounds");
+        var view = TiledContext.ViewBounds([1, 99, 1]);
+        Require(view.Min.SequenceEqual(new[] { -32, 64, -32 }) &&
+            view.Max.SequenceEqual(new[] { 48, 144, 48 }) &&
+            TiledContext.Keys(view.Min, view.Max).Count == TiledContext.MaxViewTiles,
+            "default navigation prepares an aligned full-size view within the tile limit");
+        view = TiledContext.ViewBounds([-10000, 0, 10000]);
+        Require(view.Min[0] == -10000 && view.Min[1] == 0 && view.Max[2] == 10001 &&
+            TiledContext.Keys(view.Min, view.Max).Count <= TiledContext.MaxViewTiles,
+            "navigation clips the view at supported world edges");
         var rejected = false;
         try { TiledContext.Keys([0, 0, 0], [200, 200, 200]); }
         catch (InvalidDataException) { rejected = true; }
