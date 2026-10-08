@@ -106,6 +106,8 @@ Windows contributors can help close the graphical testing gap. The test VM canno
 
 See [CRYSTAL_BRIDGE.md](CRYSTAL_BRIDGE.md) for helper commands, legacy bounded contexts, preservation rules and [verification](CRYSTAL_BRIDGE.md#verification). Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing the bridge or upstream editor code.
 
+Contributions to Crystal Goxel use GPL-3.0-or-later; no CLA or copyright assignment is required. Upstream Goxel's retained CLA material describes its separate contribution policy.
+
 Crystal Goxel is based on Goxel 0.15.2 by Guillaume Chereau. The [upstream reference](doc/UPSTREAM_README.md) retains Goxel's general documentation and build instructions; upstream downloads do not include the Crystal Project bridge.
 
 Goxel and the bridge retain **GPL-3.0-or-later** licensing. See [COPYING](COPYING) and the [dependency notices](licenses/GLFW-LICENSE.md).

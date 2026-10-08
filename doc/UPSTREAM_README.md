@@ -80,11 +80,13 @@ Then to build:
 
     make release
 
-## Contributing
+## Contributing upstream
 
-In order for your contribution to Goxel to be accepted, you have to sign the [Goxel Contributor License Agreement (CLA)](cla/sign-cla.md). This is mostly to allow me to distribute the mobile branch goxel under a non GPL licence.
+This section records upstream Goxel's contribution policy. It does not apply to Crystal Goxel, which accepts GPL-3.0-or-later contributions without a CLA. See the fork's [contribution guide](../CONTRIBUTING.md).
 
-Also, please read the [contributing document](../CONTRIBUTING.md).
+In order for your contribution to Goxel to be accepted, you have to sign the [Goxel Contributor License Agreement (CLA)](https://github.com/guillaumechereau/goxel/blob/master/doc/cla/sign-cla.md). This is mostly to allow me to distribute the mobile branch goxel under a non GPL licence.
+
+For changes sent to upstream Goxel, consult its [contributing document](https://github.com/guillaumechereau/goxel/blob/master/CONTRIBUTING.md).
 
 ## Donations
 

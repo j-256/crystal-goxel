@@ -1,24 +1,18 @@
-# Contributing to Goxel
+# Contributing to Crystal Goxel
 
-Please read this file first before making a pull request to Goxel.
+Contributions to Crystal Goxel use the project's existing [GPL-3.0-or-later license](COPYING). Contributors retain their copyright. No Contributor License Agreement (CLA) or copyright assignment is required.
 
+Submit work you are entitled to license under those terms, and preserve third-party licenses and notices. The source repository's files under `doc/cla` are retained upstream Goxel records; Crystal Goxel does not collect new signatures there. Changes submitted directly to upstream Goxel follow [upstream's contribution policy](https://github.com/guillaumechereau/goxel/blob/master/CONTRIBUTING.md).
 
-## CLA
+## Crystal Project changes and testing
 
-In your first pull request, you must add your name in a CLA file in
-'doc/cla/individual'.  This gives me the right to release special version of
-Goxel under a commercial licence.  It doesn't change the license of the current
-code.  See:
-https://github.com/guillaumechereau/goxel/blob/master/doc/cla/sign-cla.md
-For more information about that.
+Keep game-specific logic in the bridge and upstream editor changes small. The bridge uses C++17 with C-compatible entrypoints and a C# helper. Use synthetic fixtures; do not submit game assemblies, native assets, decoded data, decompiled code or user projects.
 
+See [CRYSTAL_BRIDGE.md](CRYSTAL_BRIDGE.md#verification) for the focused bridge checks and native render smoke check. The [Windows testing guide](doc/WINDOWS_TESTING.md) lists the outstanding platform checks and how to report results. Describe checks that passed, failed or were blocked; helper checks alone do not establish graphical compatibility.
 
-## Coding style
+## Upstream C coding style
 
-Try to follow the code style I used for Goxel, as I am unlikely to merge a pull
-request that doesn't.  The coding style is almost the one used by the linux
-kernel, but using four spaces for indentation, and I also accept typedef.  When
-in doubt, just look at other part of the code.  The most important rules are:
+Preserve the existing Goxel C conventions, which resemble Linux kernel style with four-space indentation and typedefs allowed. Follow the surrounding code when in doubt. These conventions apply to upstream C code; preserve the bridge's existing C++ and C# style.
 
 - Use 4 spaces indentations.  No tabs characters anywhere in the code.
 
@@ -26,8 +20,7 @@ in doubt, just look at other part of the code.  The most important rules are:
 
 - No trailing white space.
 
-- function and variable names all in lowercase, with underscore to separate
-  parts if needed:
+- Function and variable names all in lowercase, with underscores to separate parts if needed:
 
       int nb_block; // Good
       int nbBlock;  // Bad
@@ -40,7 +33,7 @@ in doubt, just look at other part of the code.  The most important rules are:
           ...
       }
 
-- Except for functions, where we put the opening brace on the next line:
+- For functions, put the opening brace on the next line:
 
       int my_func(void)
       {
@@ -48,8 +41,7 @@ in doubt, just look at other part of the code.  The most important rules are:
           return 0;
       }
 
-- I also accept exceptions to the K&R braces for multi line conditions
-  (but that should be avoided if possible by making the condition shorter):
+- For multiline conditions, placing the opening brace on the next line is accepted. Prefer a shorter condition when possible:
 
       if (a_very_long_condition ||
           that_uses_several_lines)
@@ -68,8 +60,7 @@ in doubt, just look at other part of the code.  The most important rules are:
       if (something) // Good
       if(something)  // BAD
 
-- One space around binary operators, no space after unary operators and
-  before postfix operators.
+- One space around binary operators, no space after unary operators or before postfix operators.
 
       x = 10 + 20 * 3; // Good
       x = 10+20*3; // BAD
@@ -83,16 +74,13 @@ in doubt, just look at other part of the code.  The most important rules are:
       int *x; // Good
       int* x; // BAD
 
-- Put all the variable declarations on top of the function, so that we can
-  see them all at the same place.
+- Put variable declarations at the top of C functions.
 
 
 ## Git commit style
 
 - Keep the summary line under about 50 characters.
 
-- The rest of the commit message separated by a blank line.  Wrap lines at
-  72 characters.
+- Separate the body from the summary with a blank line. Wrap body lines at 72 characters.
 
-- Try to separate the commits into smaller logical parts, so it is easier to
-  review them independently.
+- Separate commits into logical changes so they can be reviewed independently.

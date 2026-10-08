@@ -65,9 +65,8 @@ cp licenses/TRE-LICENSE.txt "$package/licenses/TRE-LICENSE.txt"
 cp licenses/GCC-COPYING3.txt licenses/GCC-COPYING.RUNTIME.txt \
     licenses/MINGW-LICENSE.txt "$package/licenses/"
 cp README.md CRYSTAL_BRIDGE.md COPYING AGENTS.md CONTRIBUTING.md "$package/"
-mkdir -p "$package/doc/cla"
+mkdir -p "$package/doc"
 cp doc/UPSTREAM_README.md doc/WINDOWS_TESTING.md "$package/doc/"
-cp doc/cla/sign-cla.md "$package/doc/cla/"
 cp licenses/* "$package/licenses/"
 python3 scripts/check-windows-package.py "$package" >&2
 printf '%s/%s\n' "$project_root" "$package"

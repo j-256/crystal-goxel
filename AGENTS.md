@@ -4,6 +4,8 @@ Crystal Goxel extends Goxel for offline Crystal Edit voxel construction against 
 
 Read CONTRIBUTING.md for upstream C conventions. Use C++17 in the bridge and retain C-compatible entrypoints for Goxel. Preserve Goxel's existing GPL license. New code comments explain non-obvious source authority, coordinate transforms, metadata preservation, and failure consequences, using ASCII and no terminal period.
 
+Crystal Goxel accepts contributions under GPL-3.0-or-later without a CLA or copyright assignment. The retained files under `doc/cla` describe upstream Goxel's separate policy; do not require or collect signatures for this fork.
+
 Never track game assemblies, assets, decoded databases, decompiled code, user projects, or local installation paths. Tests use synthetic fixtures. Load native resources only from the user-selected installation and retain version and fingerprint information in generated user artifacts.
 
 Native context is reference content. It must never enter Crystal Edit authored exports. Preserve unsupported project fields and unrelated entities. Report unsupported state instead of guessing material identity or conditional NPC behavior.
