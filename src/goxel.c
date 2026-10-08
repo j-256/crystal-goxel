@@ -911,6 +911,7 @@ void goxel_mouse_in_view(const float viewport[4], const inputs_t *inputs,
     painter_t painter = goxel.painter;
     gesture_update(arrlen(goxel.gestures), goxel.gestures, inputs, viewport,
                    NULL);
+    if (!inputs->touches[0].down[0]) crystal_follow_view(camera);
 
     ctrl = inputs->keys[KEY_LEFT_CONTROL] || inputs->keys[KEY_RIGHT_CONTROL];
     shift = inputs->keys[KEY_LEFT_SHIFT] || inputs->keys[KEY_RIGHT_SHIFT];

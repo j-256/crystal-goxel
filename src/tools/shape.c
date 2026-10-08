@@ -17,12 +17,14 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 
 
 typedef struct {
     tool_t tool;
     float  start_pos[3];
     volume_t *volume_orig;
+    bool crystal_rejected;
     bool   planar; // Stay on the original plane.
 } tool_shape_t;
 
@@ -62,6 +64,7 @@ static int on_drag(gesture3d_t *gest)
     float box[4][4], pos[3];
 
     if (gest->state == GESTURE3D_STATE_BEGIN) {
+        shape->crystal_rejected = false;
         volume_set(shape->volume_orig, layer_volume);
         vec3_copy(gest->pos, shape->start_pos);
         if (shape->planar) {
@@ -73,6 +76,13 @@ static int on_drag(gesture3d_t *gest)
 
     goxel_add_hint(HINT_LARGE, GLYPH_MOUSE_LMB, _("Draw Shape"));
     get_box(shape->start_pos, gest->pos, gest->normal, box);
+    if (shape->crystal_rejected || !crystal_prepare_edit(box)) {
+        // Preview failure cannot commit a truncated shape on mouse release
+        shape->crystal_rejected = true;
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = NULL;
+        return 0;
+    }
     if (!goxel.tool_volume) goxel.tool_volume = volume_new();
     volume_set(goxel.tool_volume, shape->volume_orig);
     volume_op(goxel.tool_volume, painter, box);

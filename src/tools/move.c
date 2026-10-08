@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 
 static const uint8_t ORIGIN_COLOR[4] = { 255, 0, 0, 255 };
 
@@ -29,6 +30,10 @@ typedef struct {
     float box[4][4];
     float start_box[4][4];
     float start_mat[4][4];
+    volume_t *move_original;
+    float move_mat[4][4];
+    float move_box[4][4];
+    bool crystal_rejected;
 } tool_move_t;
 
 static bool layer_is_volume(const layer_t *layer)
@@ -36,7 +41,7 @@ static bool layer_is_volume(const layer_t *layer)
     return !layer->base_id && !layer->image && !layer->shape;
 }
 
-static void move(layer_t *layer, const float mat[4][4])
+static bool move(layer_t *layer, const float mat[4][4])
 {
     /*
      * Note: for voxel volume layers, rotation and scale are only
@@ -48,8 +53,9 @@ static void move(layer_t *layer, const float mat[4][4])
 
     float m[4][4] = MAT4_IDENTITY;
     float origin[3];
+    float bounds[4][4];
 
-    if (mat4_equal(mat, mat4_identity)) return;
+    if (mat4_equal(mat, mat4_identity)) return true;
 
     // Make sure we always center on a grid point.
     vec3_copy(layer->mat[3], origin);
@@ -62,6 +68,9 @@ static void move(layer_t *layer, const float mat[4][4])
     mat4_itranslate(m, +origin[0], +origin[1], +origin[2]);
     mat4_imul(m, mat);
     mat4_itranslate(m, -origin[0], -origin[1], -origin[2]);
+    layer_get_bounding_box(layer, bounds);
+    mat4_mul(m, bounds, bounds);
+    if (!crystal_prepare_edit(bounds)) return false;
 
     if (!layer_is_volume(layer)) {
         mat4_mul(m, layer->mat, layer->mat);
@@ -75,6 +84,7 @@ static void move(layer_t *layer, const float mat[4][4])
             box_get_bbox(layer->box, layer->box);
         }
     }
+    return true;
 }
 
 // Compute transformation betwen two matrices.
@@ -113,6 +123,7 @@ static int iter_selection(tool_move_t *tool, const painter_t *painter,
     if (!box_edit_state) return 0;
 
     if (box_edit_state == GESTURE3D_STATE_BEGIN) {
+        tool->crystal_rejected = false;
         assert(!tool->start_volume && !tool->start_selection);
         mat4_copy(tool->box, tool->start_box);
         tool->start_volume = volume_copy(layer->volume);
@@ -122,6 +133,19 @@ static int iter_selection(tool_move_t *tool, const painter_t *painter,
     }
 
     mat4_mul(transf, tool->box, tool->box);
+    if (tool->crystal_rejected || !crystal_prepare_edit(tool->box)) {
+        tool->crystal_rejected = true;
+        volume_set(layer->volume, tool->start_volume);
+        volume_merge(layer->volume, tool->start_selection, MODE_OVER, NULL);
+        if (box_edit_state == GESTURE3D_STATE_END) {
+            volume_delete(tool->start_volume);
+            volume_delete(tool->start_selection);
+            tool->start_volume = NULL;
+            tool->start_selection = NULL;
+            tool->box[3][3] = 0;
+        }
+        return 0;
+    }
     get_transf(tool->start_box, tool->box, transf_tot);
     tmp = volume_copy(tool->start_selection);
     volume_move(tmp, transf_tot);
@@ -189,9 +213,25 @@ static int iter_volume_layer(
 
     box_edit_state = box_edit(box, GIZMO_TRANSLATION, transf);
     if (box_edit_state) {
-        move(layer, transf);
+        if (box_edit_state == GESTURE3D_STATE_BEGIN) {
+            tool->crystal_rejected = false;
+            volume_delete(tool->move_original);
+            tool->move_original = volume_copy(layer->volume);
+            mat4_copy(layer->mat, tool->move_mat);
+            mat4_copy(layer->box, tool->move_box);
+        }
+        if (tool->crystal_rejected || !move(layer, transf)) {
+            tool->crystal_rejected = true;
+            if (tool->move_original) {
+                volume_set(layer->volume, tool->move_original);
+                mat4_copy(tool->move_mat, layer->mat);
+                mat4_copy(tool->move_box, layer->box);
+            }
+        }
         if (box_edit_state == GESTURE3D_STATE_END) {
-            image_history_push(goxel.image);
+            if (!tool->crystal_rejected) image_history_push(goxel.image);
+            volume_delete(tool->move_original);
+            tool->move_original = NULL;
         }
     }
 

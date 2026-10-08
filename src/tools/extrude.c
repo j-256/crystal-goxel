@@ -17,9 +17,11 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 
 typedef struct {
     tool_t tool;
+    bool crystal_rejected;
 
     volume_t *volume_orig;
     volume_t *mask_orig;
@@ -80,7 +82,7 @@ static int get_face(const float n[3])
     return -1;
 }
 
-static void extrude(
+static bool extrude(
         volume_t *volume, const volume_t *origin,
         const volume_t *selection,
         const float normal[3], int delta)
@@ -88,13 +90,17 @@ static void extrude(
     float box[4][4], pos[3], plane[4][4];
     int snap_face;
     volume_t *tmp_volume;
+    float destination[4][4], bounds[4][4];
 
-    if (volume_is_empty(origin)) return;
-    volume_set(volume, origin);
-
-    if (delta == 0) return;
+    if (volume_is_empty(origin)) return true;
+    if (delta == 0) { volume_set(volume, origin); return true; }
     snap_face = get_face(normal);
     volume_get_box(selection, true, box);
+    mat4_copy(box, destination);
+    vec3_iaddk(destination[3], normal, delta);
+    box_union(box, destination, bounds);
+    if (!crystal_prepare_edit(bounds)) return false;
+    volume_set(volume, origin);
     mat4_mul(box, FACES_MATS[snap_face], plane);
     tmp_volume = volume_copy(selection);
     vec3_addk(plane[3], normal, delta, pos);
@@ -113,6 +119,7 @@ static void extrude(
         volume_merge(volume, tmp_volume, MODE_SUB, NULL);
     }
     volume_delete(tmp_volume);
+    return true;
 }
 
 static int on_click(gesture3d_t *gest)
@@ -139,6 +146,7 @@ static int on_drag(gesture3d_t *gest)
     if (gest->state < GESTURE3D_STATE_BEGIN) return 0;
 
     if (gest->state == GESTURE3D_STATE_BEGIN) {
+        tool->crystal_rejected = false;
         vec3_copy(gest->normal, tool->normal);
         tool->snap_face = get_face(gest->normal);
 
@@ -180,13 +188,18 @@ static int on_drag(gesture3d_t *gest)
     if (delta == tool->delta) goto end;
     tool->delta = delta;
 
-    extrude(volume, tool->volume_orig, tool->volume,
-            gest->start_normal, delta);
-    extrude(mask, tool->mask_orig, tool->volume,
-            gest->start_normal, delta);
+    if (tool->crystal_rejected ||
+        !extrude(volume, tool->volume_orig, tool->volume,
+                 gest->start_normal, delta)) {
+        tool->crystal_rejected = true;
+        volume_set(volume, tool->volume_orig);
+        volume_set(mask, tool->mask_orig);
+        return 0;
+    }
+    extrude(mask, tool->mask_orig, tool->volume, gest->start_normal, delta);
 
 end:
-    if (gest->state == GESTURE3D_STATE_END) {
+    if (gest->state == GESTURE3D_STATE_END && !tool->crystal_rejected) {
         image_history_push(goxel.image);
     }
     return 0;

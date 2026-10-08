@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 
 
 typedef struct {
@@ -28,6 +29,7 @@ typedef struct {
     // Gesture start and last pos (should we put it in the 3d gesture?)
     float start_pos[3];
     float last_pos[3];
+    bool crystal_rejected;
     // Cache of the last operation.
     // XXX: could we remove this?
     struct     {
@@ -114,6 +116,21 @@ static int on_drag(gesture3d_t *gest)
     float pos[3];
 
     if (gest->state == GESTURE3D_STATE_BEGIN) {
+        brush->crystal_rejected = false;
+        vec3_copy(gest->pos, brush->last_pos);
+    }
+    bbox_from_points(box, shift ? brush->start_pos : brush->last_pos,
+                     gest->pos);
+    bbox_grow(box, r, r, r, box);
+    if (brush->crystal_rejected || !crystal_prepare_edit(box)) {
+        // A failed segment cancels the whole stroke before any layer commit
+        brush->crystal_rejected = true;
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = NULL;
+        return 0;
+    }
+
+    if (gest->state == GESTURE3D_STATE_BEGIN) {
         volume_set(brush->volume_orig, goxel.image->active_layer->volume);
         brush->last_op.mode = 0; // Discard last op.
         vec3_copy(gest->pos, brush->last_pos);
@@ -190,6 +207,11 @@ static int on_hover(gesture3d_t *gest)
         return 0;
 
     get_box(gest->pos, NULL, gest->normal, goxel.tool_radius, NULL, box);
+    if (!crystal_prepare_edit(box)) {
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = NULL;
+        return 0;
+    }
 
     if (!goxel.tool_volume) goxel.tool_volume = volume_new();
     volume_set(goxel.tool_volume, volume);

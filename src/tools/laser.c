@@ -17,11 +17,14 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 
 
 typedef struct {
     tool_t tool;
     float  box[4][4];
+    volume_t *volume_orig;
+    bool crystal_rejected;
 } tool_laser_t;
 
 
@@ -57,15 +60,32 @@ static int on_drag(gesture3d_t *gest)
     painter_t painter = *(painter_t*)USER_GET(gest->user, 1);
     volume_t *volume = goxel.image->active_layer->volume;
 
+    if (gest->state == GESTURE3D_STATE_BEGIN) {
+        laser->crystal_rejected = false;
+        volume_delete(laser->volume_orig);
+        laser->volume_orig = volume_copy(volume);
+    }
     on_hover(gest);
+    if (laser->crystal_rejected || !crystal_prepare_edit(laser->box)) {
+        laser->crystal_rejected = true;
+        if (laser->volume_orig) volume_set(volume, laser->volume_orig);
+        if (gest->state == GESTURE3D_STATE_END) {
+            volume_delete(laser->volume_orig);
+            laser->volume_orig = NULL;
+        }
+        return 0;
+    }
     painter.mode = MODE_SUB_CLAMP;
     painter.shape = &shape_cylinder;
     vec4_set(painter.color, 255, 255, 255, 255);
 
     volume_op(volume, &painter, laser->box);
 
-    if (gest->state == GESTURE3D_STATE_END)
+    if (gest->state == GESTURE3D_STATE_END) {
         image_history_push(goxel.image);
+        volume_delete(laser->volume_orig);
+        laser->volume_orig = NULL;
+    }
 
     return 0;
 }

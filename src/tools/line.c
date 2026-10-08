@@ -17,9 +17,11 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 
 typedef struct {
     tool_t tool;
+    bool crystal_rejected;
 
     volume_t *volume_orig; // Original volume.
     volume_t *volume;      // Volume containing only the tool path.
@@ -83,6 +85,7 @@ static int on_drag(gesture3d_t *gest)
     float box[4][4];
 
     if (gest->state == GESTURE3D_STATE_BEGIN) {
+        tool->crystal_rejected = false;
         vec3_copy(gest->pos, tool->start_pos);
         assert(tool->volume_orig);
         volume_set(tool->volume_orig, goxel.image->active_layer->volume);
@@ -92,6 +95,12 @@ static int on_drag(gesture3d_t *gest)
     painter.mode = MODE_MAX;
     vec4_set(painter.color, 255, 255, 255, 255);
     get_box(tool->start_pos, gest->pos, gest->normal, radius, NULL, box);
+    if (tool->crystal_rejected || !crystal_prepare_edit(box)) {
+        tool->crystal_rejected = true;
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = NULL;
+        return 0;
+    }
     volume_clear(tool->volume);
     volume_op(tool->volume, &painter, box);
 
@@ -124,6 +133,11 @@ static int on_hover(gesture3d_t *gest)
         return 0;
     }
     get_box(gest->pos, NULL, gest->normal, goxel.tool_radius, NULL, box);
+    if (!crystal_prepare_edit(box)) {
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = NULL;
+        return 0;
+    }
 
     if (!goxel.tool_volume) goxel.tool_volume = volume_new();
     volume_set(goxel.tool_volume, volume);

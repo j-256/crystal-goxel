@@ -18,6 +18,7 @@ extern "C" {
 #include <map>
 #include <memory>
 #include <sstream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -31,6 +32,11 @@ constexpr uint8_t TOKEN_SIGNATURE = 0xc7;
 constexpr size_t MAX_ASSET = 256 * 1024 * 1024;
 constexpr size_t MAX_STATE = CRYSTAL_MAX_STATE;
 constexpr size_t MAX_PREVIEW_VERTICES = 4'000'000;
+constexpr int NATIVE_TILE_EDGE = 16;
+constexpr int MAX_VIEW_TILES = 125;
+constexpr int WORLD_EXTENT = 10000;
+constexpr int WORLD_HEIGHT = 256;
+constexpr unsigned MAX_BOOKMARKS = 64;
 constexpr char DEFAULT_EXPORT_NAME[] = "crystal-project.json";
 using Json = std::unique_ptr<json_value, decltype(&json_value_free)>;
 using Model = std::unique_ptr<model3d_t, decltype(&model3d_delete)>;
@@ -40,7 +46,12 @@ struct Block {
 };
 struct State {
     std::string path, manifest, source, managed = "[]";
+    std::string identities = "[]", bookmarks = "[]";
     std::array<int, 3> origin{}, size{};
+    std::array<int, 3> center{ 1, 99, 1 }, view_min{}, view_max{};
+    std::set<std::array<int, 3>> tiles;
+    bool tiled = false;
+    bool follow_view = true;
     std::vector<Block> blocks;
     std::map<int, std::vector<model_vertex_t>> templates;
     Model reference{ nullptr, model3d_delete };
@@ -66,7 +77,22 @@ std::unique_ptr<State> state;
 std::string helper, status, pending;
 uint32_t pending_key = 0;
 char context_input[4096] = {};
+char installation_input[4096] = {};
+char cache_input[4096] = {};
+char bookmark_input[128] = {};
+int location_input[3] = { 1, 99, 1 };
+std::string failed_tile_request;
 int selected = 0, variant = 0;
+
+std::array<int, 3> triple(const json_value &value);
+
+void check_location(const std::array<int, 3> &point)
+{
+    if (std::abs(int64_t(point[0])) > WORLD_EXTENT ||
+        std::abs(int64_t(point[2])) > WORLD_EXTENT ||
+        point[1] < 0 || point[1] >= WORLD_HEIGHT)
+        throw std::runtime_error("Location exceeds supported world bounds");
+}
 
 std::string read_file(const std::filesystem::path &path,
                       size_t limit = MAX_ASSET)
@@ -148,9 +174,12 @@ void update_metadata_key(State &saved)
 {
     saved.metadata_key = 0;
     for (const auto *value :
-         { &saved.path, &saved.manifest, &saved.source, &saved.managed })
+         { &saved.path, &saved.manifest, &saved.source, &saved.managed,
+           &saved.identities, &saved.bookmarks })
         saved.metadata_key = XXH32(
                 value->data(), value->size(), saved.metadata_key);
+    saved.metadata_key = XXH32(saved.center.data(), sizeof(saved.center),
+                              saved.metadata_key);
 }
 
 std::string saved_data(const State &saved)
@@ -159,7 +188,14 @@ std::string saved_data(const State &saved)
                 ",\"manifest\":" + quote(saved.manifest) +
                 ",\"source\":" + quote(saved.source) +
                 ",\"managed\":" + saved.managed + ",\"newObjectsSolid\":" +
-                (saved.new_objects_solid ? "true}" : "false}");
+                (saved.new_objects_solid ? "true" : "false");
+    if (saved.tiled)
+        data += ",\"identities\":" + saved.identities +
+                ",\"bookmarks\":" + saved.bookmarks +
+                ",\"location\":[" + std::to_string(saved.center[0]) + "," +
+                std::to_string(saved.center[1]) + "," +
+                std::to_string(saved.center[2]) + "]";
+    data += '}';
     if (data.size() > MAX_STATE)
         throw std::runtime_error(
                 "Bridge project state exceeds its save limit");
@@ -175,7 +211,32 @@ Json saved_json(const std::string &data)
     for (const char *key : { "context", "manifest", "source" })
         string((*root)[key]);
     new_objects_solid(*root);
+    for (const char *key : { "identities", "bookmarks", "location" })
+        if ((*root)[key].type != json_none &&
+            (*root)[key].type != json_array)
+            throw std::runtime_error("Invalid saved world document metadata");
+    if ((*root)["location"].type != json_none)
+        check_location(triple((*root)["location"]));
+    const auto &bookmarks = (*root)["bookmarks"];
+    if (bookmarks.type != json_none) {
+        if (bookmarks.u.array.length > MAX_BOOKMARKS)
+            throw std::runtime_error("Location bookmark limit reached");
+        std::set<std::string> names;
+        for (unsigned i = 0; i < bookmarks.u.array.length; i++) {
+            auto name = string(bookmarks[i]["name"]);
+            if (name.empty() || name.size() >= sizeof(bookmark_input) ||
+                !names.insert(name).second)
+                throw std::runtime_error("Invalid saved location name");
+            check_location(triple(bookmarks[i]["world"]));
+        }
+    }
     return root;
+}
+
+Json helper_report(const std::string &output)
+{
+    // The helper writes a JSON result before its diagnostic line
+    return parse(output.substr(0, output.find('\n')));
 }
 
 std::string run_helper(const std::vector<std::string> &arguments)
@@ -298,6 +359,212 @@ std::vector<model_vertex_t> vertices(
     return result;
 }
 
+std::string triple(const std::array<int, 3> &point)
+{
+    return std::to_string(point[0]) + "," + std::to_string(point[1]) + "," +
+           std::to_string(point[2]);
+}
+
+std::array<int, 3> triple(const json_value &value)
+{
+    if (value.type != json_array || value.u.array.length != 3)
+        throw std::runtime_error("Expected three world coordinates");
+    return { number(value[0]), number(value[1]), number(value[2]) };
+}
+
+int tile_index(int coordinate)
+{
+    // Integer division truncates toward zero; negative world cells need floor
+    return int(std::floor(double(coordinate) / NATIVE_TILE_EDGE));
+}
+
+void view_box(const State &saved, float box[4][4])
+{
+    int bounds[2][3];
+    if (saved.tiled) {
+        int world[2][3] = {
+            { saved.view_min[0], -saved.view_max[2], saved.view_min[1] },
+            { saved.view_max[0], -saved.view_min[2], saved.view_max[1] }
+        };
+        memcpy(bounds, world, sizeof(bounds));
+    } else {
+        int local[2][3] = {
+            { 0, -saved.size[2], 0 },
+            { saved.size[0], 0, saved.size[1] }
+        };
+        memcpy(bounds, local, sizeof(bounds));
+    }
+    bbox_from_aabb(box, bounds);
+}
+
+void reference_geometry(const std::filesystem::path &directory,
+                        const std::array<int, 3> &origin,
+                        const std::array<int, 3> &size, bool global,
+                        std::vector<model_vertex_t> &mesh,
+                        std::vector<std::array<int, 3>> &owners)
+{
+    auto data = read_file(directory / "reference.mesh");
+    size_t offset = 4;
+    if (data.substr(0, 4) != "CGM1")
+        throw std::runtime_error("Invalid reference mesh signature");
+    auto count = integer(data, offset);
+    auto part = vertices(data, offset, count);
+    if (offset != data.size() || mesh.size() + part.size() >
+                                MAX_PREVIEW_VERTICES)
+        throw std::runtime_error("Reference mesh exceeds its view limit");
+    data = read_file(directory / "reference.cells");
+    offset = 4;
+    if (data.substr(0, 4) != "CGC1" || integer(data, offset) != count / 3)
+        throw std::runtime_error("Invalid reference cell ownership");
+    for (int i = 0; i < count / 3; i++) {
+        std::array<int, 3> cell;
+        for (int k = 0; k < 3; k++) cell[k] = integer(data, offset);
+        if (cell[0] < 0 || cell[0] >= size[0] || cell[1] < -size[2] ||
+            cell[1] >= 0 || cell[2] < 0 || cell[2] >= size[1])
+            throw std::runtime_error("Reference owner exceeds tile bounds");
+        if (global) {
+            cell[0] += origin[0];
+            cell[1] -= origin[2];
+            cell[2] += origin[1];
+        }
+        owners.push_back(cell);
+    }
+    if (offset != data.size())
+        throw std::runtime_error("Trailing reference ownership data");
+    for (auto &vertex : part) {
+        if (global) {
+            vertex.pos[0] += origin[0];
+            vertex.pos[1] -= origin[2];
+            vertex.pos[2] += origin[1];
+        }
+        mesh.push_back(vertex);
+    }
+}
+
+void prepare_view(State &saved, const std::array<int, 3> &min,
+                  const std::array<int, 3> &max)
+{
+    Temporary temp;
+    auto path = temp.directory / "view.json";
+    run_helper({ "tiles", "--context", saved.path, "--min", triple(min),
+                 "--max", triple(max), "--output", path.string() });
+    auto view = parse(read_file(path, MAX_STATE));
+    const auto &tiles = (*view)["tiles"];
+    if (tiles.type != json_array || tiles.u.array.length == 0 ||
+        tiles.u.array.length > MAX_VIEW_TILES)
+        throw std::runtime_error("Invalid prepared tile view");
+    std::vector<model_vertex_t> mesh;
+    std::vector<std::array<int, 3>> owners;
+    std::set<std::array<int, 3>> ready;
+    std::array<int, 3> first = min, last = max;
+    for (int k = 0; k < 3; k++) {
+        first[k] = tile_index(min[k]) * NATIVE_TILE_EDGE;
+        last[k] = (tile_index(max[k] - 1) + 1) * NATIVE_TILE_EDGE;
+    }
+    for (unsigned i = 0; i < tiles.u.array.length; i++) {
+        const auto &tile = tiles[i];
+        auto origin = triple(tile["origin"]);
+        std::array<int, 3> key;
+        for (int k = 0; k < 3; k++) {
+            if (origin[k] % NATIVE_TILE_EDGE || origin[k] < first[k] ||
+                origin[k] >= last[k])
+                throw std::runtime_error("Prepared tile is outside the view");
+            key[k] = tile_index(origin[k]);
+        }
+        if (!ready.insert(key).second)
+            throw std::runtime_error("Duplicate prepared terrain tile");
+        reference_geometry(string(tile["path"]), origin,
+                           { NATIVE_TILE_EDGE, NATIVE_TILE_EDGE,
+                             NATIVE_TILE_EDGE }, true,
+                           mesh, owners);
+    }
+    size_t expected = 1;
+    for (int k = 0; k < 3; k++)
+        expected *= size_t((last[k] - first[k]) / NATIVE_TILE_EDGE);
+    if (ready.size() != expected)
+        throw std::runtime_error("Prepared view is missing a terrain tile");
+    auto reference = model(mesh);
+    // Geometry, picking ownership and loaded bounds are published together
+    saved.reference = std::move(reference);
+    saved.reference_cells = std::move(owners);
+    saved.tiles = std::move(ready);
+    saved.view_min = first;
+    saved.view_max = last;
+    for (int k = 0; k < 3; k++) saved.size[k] = last[k] - first[k];
+    saved.authored.reset();
+    saved.picking.reset();
+}
+
+void location_view(State &saved, const std::array<int, 3> &center)
+{
+    check_location(center);
+    std::array<int, 3> min, max;
+    for (int k = 0; k < 3; k++) {
+        min[k] = (tile_index(center[k]) - 1) * NATIVE_TILE_EDGE;
+        max[k] = (tile_index(center[k]) + 2) * NATIVE_TILE_EDGE;
+    }
+    min[0] = std::max(min[0], -WORLD_EXTENT);
+    max[0] = std::min(max[0], WORLD_EXTENT + 1);
+    min[1] = std::max(min[1], 0);
+    max[1] = std::min(max[1], WORLD_HEIGHT);
+    min[2] = std::max(min[2], -WORLD_EXTENT);
+    max[2] = std::min(max[2], WORLD_EXTENT + 1);
+    prepare_view(saved, min, max);
+    saved.center = center;
+}
+
+void restore_metadata(State &saved, const json_value &root)
+{
+    saved.source = string(root["source"]);
+    saved.managed = serialize(&root["managed"]);
+    saved.new_objects_solid = new_objects_solid(root);
+    if (root["identities"].type != json_none)
+        saved.identities = serialize(&root["identities"]);
+    if (root["bookmarks"].type != json_none)
+        saved.bookmarks = serialize(&root["bookmarks"]);
+    if (root["location"].type != json_none)
+        saved.center = triple(root["location"]);
+}
+
+void visit_location(const std::array<int, 3> &center, bool frame)
+{
+    location_view(*state, center);
+    update_metadata_key(*state);
+    std::copy(center.begin(), center.end(), location_input);
+    if (frame) {
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = nullptr;
+        float box[4][4];
+        view_box(*state, box);
+        camera_fit_box(goxel.image->active_camera, box);
+    }
+    failed_tile_request.clear();
+    status = "Location loaded. Edits at other locations remain in this mod.";
+}
+
+void add_bookmark(const std::string &name)
+{
+    if (name.empty() || name.size() >= sizeof(bookmark_input))
+        throw std::runtime_error("Enter a short location name");
+    auto root = parse("{\"items\":" + state->bookmarks + "}");
+    const auto &items = (*root)["items"];
+    if (items.u.array.length >= MAX_BOOKMARKS)
+        throw std::runtime_error("Location bookmark limit reached");
+    for (unsigned i = 0; i < items.u.array.length; i++)
+        if (string(items[i]["name"]) == name)
+            throw std::runtime_error("Choose a unique location name");
+    auto next = state->bookmarks;
+    next.pop_back();
+    if (items.u.array.length) next += ',';
+    next += "{\"name\":" + quote(name) + ",\"world\":[" +
+            std::to_string(state->center[0]) + "," +
+            std::to_string(state->center[1]) + "," +
+            std::to_string(state->center[2]) + "]}]";
+    auto normalized = parse("{\"items\":" + next + "}");
+    state->bookmarks = serialize(&(*normalized)["items"]);
+    update_metadata_key(*state);
+}
+
 void choose_block()
 {
     if (!state || state->blocks.empty()) return;
@@ -362,6 +629,7 @@ void import_project(const char *path)
     auto snapshot = temp.directory / "snapshot.json";
     auto report = run_helper({ "import", "--context", state->path, "--source",
                                path, "--output", snapshot.string() });
+    auto result = helper_report(report);
     auto root = parse(read_file(snapshot, MAX_STATE));
     const auto &cells = (*root)["cells"];
     if (cells.type != json_array)
@@ -374,6 +642,9 @@ void import_project(const char *path)
     metadata.source = string((*root)["source"]);
     metadata.managed = serialize(&(*root)["managed"]);
     metadata.new_objects_solid = state->new_objects_solid;
+    metadata.tiled = state->tiled;
+    metadata.center = state->center;
+    metadata.bookmarks = state->bookmarks;
     saved_data(metadata);
     struct Imported {
         std::array<int, 3> pos;
@@ -396,9 +667,13 @@ void import_project(const char *path)
                       cell.pos.data(), cell.token.data());
     state->source = std::move(metadata.source);
     state->managed = std::move(metadata.managed);
+    state->identities = "[]";
     update_metadata_key(*state);
     image_history_push(goxel.image);
-    status = report;
+    status = "Imported " + std::to_string(number((*result)["imported"])) +
+             " editable objects. Preserved " +
+             std::to_string(number((*result)["preserved"])) +
+             " other entities in the source project.";
 }
 
 void export_project(const char *path)
@@ -409,10 +684,36 @@ void export_project(const char *path)
     output << "{\"format\":1,\"source\":" << quote(state->source)
            << ",\"managed\":" << state->managed << ",\"newObjectsSolid\":"
            << (state->new_objects_solid ? "true" : "false")
+           << ",\"identities\":" << state->identities
            << ",\"cells\":" << cells_json() << '}';
     output.close();
-    status = run_helper({ "export", "--context", state->path, "--snapshot",
-                          snapshot.string(), "--output", path });
+    if (state->tiled) {
+        auto allocated = temp.directory / "allocated.json";
+        run_helper({ "allocate", "--context", state->path, "--snapshot",
+                     snapshot.string(), "--output", allocated.string() });
+        auto root = parse(read_file(allocated, MAX_STATE));
+        State metadata;
+        metadata.path = state->path;
+        metadata.manifest = state->manifest;
+        metadata.tiled = true;
+        metadata.center = state->center;
+        metadata.bookmarks = state->bookmarks;
+        metadata.managed = state->managed;
+        metadata.new_objects_solid = state->new_objects_solid;
+        metadata.source = string((*root)["source"]);
+        metadata.identities = serialize(&(*root)["identities"]);
+        saved_data(metadata);
+        run_helper({ "export", "--context", state->path,
+                     "--snapshot", allocated.string(), "--output", path });
+        state->source = std::move(metadata.source);
+        state->identities = std::move(metadata.identities);
+        update_metadata_key(*state);
+        status = "Exported all locations to " + std::string(path);
+        return;
+    }
+    run_helper({ "export", "--context", state->path, "--snapshot",
+                 snapshot.string(), "--output", path });
+    status = "Exported Crystal Edit project to " + std::string(path);
 }
 
 void export_dialog()
@@ -432,7 +733,12 @@ void rebuild(bool preview)
          layer = layer->next)
     {
         if (!layer->visible || !layer->volume) continue;
-        auto it = volume_get_iterator(layer->volume, VOLUME_ITER_SKIP_EMPTY);
+        float box[4][4];
+        view_box(*state, box);
+        auto it = state->tiled ?
+            volume_get_box_iterator(layer->volume, box,
+                                    VOLUME_ITER_SKIP_EMPTY) :
+            volume_get_iterator(layer->volume, VOLUME_ITER_SKIP_EMPTY);
         int p[3];
         uint8_t token[4];
         while (volume_iter(&it, p)) {
@@ -552,6 +858,13 @@ extern "C" bool crystal_active(void)
 {
     return bool(state);
 }
+
+extern "C" bool crystal_reference_bounds(float box[4][4])
+{
+    if (!state) return false;
+    view_box(*state, box);
+    return true;
+}
 extern "C" void crystal_reset(void)
 {
     state.reset();
@@ -559,6 +872,104 @@ extern "C" void crystal_reset(void)
     status.clear();
     context_input[0] = '\0';
     selected = variant = 0;
+    failed_tile_request.clear();
+}
+
+extern "C" bool crystal_prepare_edit(const float box[4][4])
+{
+    if (!state || !state->tiled || box_is_null(box)) return true;
+    std::string request;
+    try {
+        float corners[8][3];
+        box_get_vertices(box, corners);
+        std::array<int, 3> lower, upper;
+        for (int k = 0; k < 3; k++) {
+            float min = corners[0][k], max = corners[0][k];
+            for (auto &corner : corners) {
+                if (!std::isfinite(corner[k]) ||
+                    std::abs(corner[k]) > WORLD_EXTENT + NATIVE_TILE_EDGE)
+                    throw std::runtime_error(
+                            "Edit exceeds supported world bounds");
+                min = std::min(min, corner[k]);
+                max = std::max(max, corner[k]);
+            }
+            lower[k] = int(std::floor(min));
+            upper[k] = std::max(lower[k] + 1, int(std::ceil(max)));
+        }
+        std::array<int, 3> min{ lower[0], lower[2], -upper[1] };
+        std::array<int, 3> max{ upper[0], upper[2], -lower[1] };
+        if (min[0] < -WORLD_EXTENT || max[0] > WORLD_EXTENT + 1 ||
+            min[1] < 0 || max[1] > WORLD_HEIGHT ||
+            min[2] < -WORLD_EXTENT || max[2] > WORLD_EXTENT + 1)
+            throw std::runtime_error("Edit exceeds supported world bounds");
+        request = triple(min) + ":" + triple(max);
+        if (request == failed_tile_request) return false;
+        bool ready = true;
+        size_t count = 1;
+        for (int k = 0; k < 3; k++)
+            count *= size_t(tile_index(max[k] - 1) - tile_index(min[k]) + 1);
+        if (count > MAX_VIEW_TILES)
+            throw std::runtime_error(
+                    "Edit exceeds the tile limit; use a smaller selection");
+        for (int x = tile_index(min[0]); x <= tile_index(max[0] - 1); x++)
+            for (int y = tile_index(min[1]); y <= tile_index(max[1] - 1); y++)
+                for (int z = tile_index(min[2]);
+                     z <= tile_index(max[2] - 1); z++)
+                    ready &= state->tiles.count({ x, y, z }) != 0;
+        if (ready) return true;
+        auto expanded_min = min, expanded_max = max;
+        count = 1;
+        for (int k = 0; k < 3; k++) {
+            expanded_min[k] = std::min(min[k], state->view_min[k]);
+            expanded_max[k] = std::max(max[k], state->view_max[k]);
+            if (k == 1) {
+                expanded_min[k] = std::max(expanded_min[k], 0);
+                expanded_max[k] = std::min(expanded_max[k], WORLD_HEIGHT);
+            } else {
+                expanded_min[k] = std::max(expanded_min[k], -WORLD_EXTENT);
+                expanded_max[k] = std::min(expanded_max[k], WORLD_EXTENT + 1);
+            }
+            count *= size_t(tile_index(expanded_max[k] - 1) -
+                            tile_index(expanded_min[k]) + 1);
+        }
+        prepare_view(*state, count <= MAX_VIEW_TILES ? expanded_min : min,
+                     count <= MAX_VIEW_TILES ? expanded_max : max);
+        failed_tile_request.clear();
+        return true;
+    }
+    catch (const std::exception &error) {
+        failed_tile_request = request;
+        status = "Edit cancelled: " + std::string(error.what());
+        return false;
+    }
+}
+
+extern "C" void crystal_follow_view(const camera_t *camera)
+{
+    if (!state || !state->tiled || !state->follow_view) return;
+    float target[3];
+    mat4_mul_vec3(camera->mat, VEC(0, 0, -camera->dist), target);
+    for (float value : target)
+        if (!std::isfinite(value) || std::abs(value) > WORLD_EXTENT) return;
+    std::array<int, 3> center{
+        int(std::floor(target[0])),
+        std::clamp(int(std::floor(target[2])), 0, WORLD_HEIGHT - 1),
+        int(std::floor(-target[1]))
+    };
+    bool changed = false;
+    for (int k = 0; k < 3; k++)
+        changed |= tile_index(center[k]) != tile_index(state->center[k]);
+    auto request = "camera:" + triple(center);
+    if (!changed || request == failed_tile_request) return;
+    try {
+        visit_location(center, false);
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = nullptr;
+    }
+    catch (const std::exception &error) {
+        failed_tile_request = request;
+        status = "Terrain loading failed: " + std::string(error.what());
+    }
 }
 
 extern "C" bool crystal_load(const char *path, bool frame)
@@ -569,90 +980,72 @@ extern "C" bool crystal_load(const char *path, bool frame)
         next->manifest = read_file(next->path, MAX_STATE);
         auto root = parse(next->manifest);
         run_helper({ "validate", "--context", next->path });
-        for (int k = 0; k < 3; k++) {
-            next->origin[k] = number((*root)["origin"][k]);
-            next->size[k] = number((*root)["size"][k]);
-        }
+        next->tiled = number((*root)["format"]) == 2;
+        next->origin = triple((*root)["origin"]);
+        if (!next->tiled) next->size = triple((*root)["size"]);
+        bool same_source = state && state->manifest == next->manifest;
+        if (state && !same_source &&
+            (!state->source.empty() || cells_json() != "[]"))
+            throw std::runtime_error(
+                    "Start a new document before changing its native source");
         const auto &blocks = (*root)["blocks"];
         if (blocks.type != json_array || !blocks.u.array.length)
             throw std::runtime_error("Missing native palette");
         for (unsigned i = 0; i < blocks.u.array.length; i++) {
-            const auto &b = *blocks.u.array.values[i];
-            next->blocks.push_back({ number(b["id"]), number(b["maxVariant"]),
-                                     string(b["name"]) });
+            const auto &block = *blocks.u.array.values[i];
+            next->blocks.push_back({ number(block["id"]),
+                                     number(block["maxVariant"]),
+                                     string(block["name"]) });
         }
         auto directory = std::filesystem::path(next->path).parent_path();
-        auto data = read_file(directory / "reference.mesh");
+        auto data = read_file(directory / "palette.mesh");
         size_t offset = 4;
-        if (data.substr(0, 4) != "CGM1")
-            throw std::runtime_error("Invalid reference mesh signature");
-        auto count = integer(data, offset);
-        next->reference = model(vertices(data, offset, count));
-        if (offset != data.size())
-            throw std::runtime_error("Trailing reference mesh data");
-        data = read_file(directory / "reference.cells");
-        offset = 4;
-        if (data.substr(0, 4) != "CGC1" || integer(data, offset) != count / 3)
-            throw std::runtime_error("Invalid reference cell ownership");
-        for (int i = 0; i < count / 3; i++) {
-            std::array<int, 3> cell;
-            for (int k = 0; k < 3; k++)
-                cell[k] = integer(data, offset);
-            if (cell[0] < 0 || cell[0] >= next->size[0] ||
-                cell[1] < -next->size[2] || cell[1] >= 0 || cell[2] < 0 ||
-                cell[2] >= next->size[1])
-                throw std::runtime_error(
-                        "Reference owner exceeds context bounds");
-            next->reference_cells.push_back(cell);
-        }
-        if (offset != data.size())
-            throw std::runtime_error("Trailing reference cell data");
-        data = read_file(directory / "palette.mesh");
-        offset = 4;
         if (data.substr(0, 4) != "CGP1")
             throw std::runtime_error("Invalid palette mesh signature");
         while (offset < data.size()) {
             auto id = integer(data, offset);
             auto v = integer(data, offset);
-            count = integer(data, offset);
+            auto count = integer(data, offset);
             if (id < 1 || id > 255 || v < 0 || v > 3 ||
-                !next->templates
-                         .emplace(id * 4 + v, vertices(data, offset, count))
-                         .second)
+                !next->templates.emplace(id * 4 + v,
+                                         vertices(data, offset, count)).second)
                 throw std::runtime_error(
                         "Invalid or duplicate native block template");
         }
         int bpp = 4;
         auto atlas_path = (directory / "atlas.png").string();
-        auto *pixels = img_read(
-                atlas_path.c_str(), &next->atlas_w, &next->atlas_h, &bpp);
+        auto *pixels = img_read(atlas_path.c_str(), &next->atlas_w,
+                                &next->atlas_h, &bpp);
         if (!pixels || bpp != 4 || next->atlas_w != 432 ||
-            next->atlas_h != 432)
-        {
+            next->atlas_h != 432) {
             free(pixels);
             throw std::runtime_error("Unexpected native atlas dimensions");
         }
         next->pixels.assign(pixels, pixels + 432 * 432 * 4);
         next->atlas = texture_new_from_buf(pixels, 432, 432, 4, TF_NEAREST);
         free(pixels);
-        if (state &&
-            (state->origin != next->origin || state->size != next->size ||
-             state->manifest != next->manifest))
-            throw std::runtime_error(
-                    "Start a new document before changing its native context");
-        if (state) {
+        if (same_source) {
             next->source = state->source;
             next->managed = state->managed;
+            next->identities = state->identities;
+            next->bookmarks = state->bookmarks;
+            next->center = state->center;
             next->new_objects_solid = state->new_objects_solid;
         }
         if (!pending.empty()) {
             auto saved = saved_json(pending);
             if (next->manifest != string((*saved)["manifest"]))
                 throw std::runtime_error(
-                        "Choose the original saved native context");
-            next->source = string((*saved)["source"]);
-            next->managed = serialize(&(*saved)["managed"]);
-            next->new_objects_solid = new_objects_solid(*saved);
+                        "Choose the original saved native source");
+            restore_metadata(*next, *saved);
+        }
+        if (next->tiled) {
+            location_view(*next, next->center);
+        } else {
+            std::vector<model_vertex_t> mesh;
+            reference_geometry(directory, next->origin, next->size, false,
+                               mesh, next->reference_cells);
+            next->reference = model(mesh);
         }
         saved_data(*next);
         update_metadata_key(*next);
@@ -660,27 +1053,29 @@ extern "C" bool crystal_load(const char *path, bool frame)
         selected = variant = 0;
         choose_block();
         pending.clear();
-        int aabb[2][3] = { { 0, -state->size[2], 0 },
-                           { state->size[0], 0, state->size[1] } };
-        bbox_from_aabb(goxel.image->box, aabb);
+        float box[4][4];
+        view_box(*state, box);
+        if (state->tiled)
+            memset(goxel.image->box, 0, sizeof(goxel.image->box));
+        else
+            mat4_copy(box, goxel.image->box);
         goxel.hide_box = true;
-        // Start brushes on real surfaces rather than the invisible bounding
-        // box of the crop
         goxel.snap_mask = SNAP_VOLUME;
-        if (frame)
-            camera_fit_box(goxel.image->active_camera, goxel.image->box);
+        if (frame) camera_fit_box(goxel.image->active_camera, box);
         snprintf(context_input, sizeof(context_input), "%s", path);
+        std::copy(state->center.begin(), state->center.end(), location_input);
         if (goxel.image->active_layer)
             snprintf(goxel.image->active_layer->name,
                      sizeof(goxel.image->active_layer->name),
                      "Authored Crystal Edit voxels");
-        status = "Native context loaded. Select a block below, then paint "
-                 "against the world.";
+        failed_tile_request.clear();
+        status = "Native context loaded. Select a block, then paint.";
+        if (state->tiled) status += " All locations belong to one mod.";
         return true;
     }
     catch (const std::exception &error) {
         status = error.what();
-        fprintf(stderr, "crystal-goxel: %s\n", error.what());
+        fprintf(stderr, "crystal-goxel load: %s\n", error.what());
         return false;
     }
 }
@@ -733,6 +1128,45 @@ extern "C" bool crystal_pick(const camera_t *camera,
 extern "C" void crystal_panel(void)
 {
     gui_text_wrapped("Build Crystal Edit voxels against the native world.");
+    if (gui_section_begin("Create tiled world",
+                          GUI_SECTION_COLLAPSABLE_CLOSED)) {
+        gui_input_text("Game installation", installation_input,
+                       sizeof(installation_input));
+        if (gui_button("Choose game folder", 0, 0)) {
+            auto *path = sys_open_folder_dialog(
+                    "Select Windows game installation", nullptr);
+            if (path) snprintf(installation_input, sizeof(installation_input),
+                               "%s", path);
+        }
+        gui_input_text("New cache folder", cache_input, sizeof(cache_input));
+        if (gui_button("Choose cache parent", 0, 0)) {
+            auto *path = sys_open_folder_dialog(
+                    "Choose a private cache parent", nullptr);
+            if (path) snprintf(cache_input, sizeof(cache_input),
+                               "%s/crystal-goxel-world", path);
+        }
+        if (gui_button("Create world cache", 0, 0)) {
+            try {
+                if (!pending.empty() ||
+                    (state && (!state->source.empty() || cells_json() != "[]")))
+                    throw std::runtime_error(
+                            "Create a world in a new authored document");
+                if (!installation_input[0] || !cache_input[0])
+                    throw std::runtime_error(
+                            "Select the game and a new cache folder");
+                run_helper({ "world", "--game", installation_input,
+                             "--output", cache_input });
+                auto path = std::filesystem::path(cache_input) / "world.json";
+                crystal_load(path.string().c_str(), true);
+            }
+            catch (const std::exception &error) {
+                status = error.what();
+            }
+        }
+        gui_text_wrapped("Choose a new private cache folder. Native terrain is "
+                         "prepared as you visit locations.");
+    }
+    gui_section_end();
     gui_input_text("Context", context_input, sizeof(context_input));
     if (gui_button("Open native context", 0, 0)) {
         const char *filters[] = { "*.json", nullptr };
@@ -746,7 +1180,75 @@ extern "C" void crystal_panel(void)
         gui_checkbox("Show native world", &state->show,
                      "Reference geometry is never part of authored exports");
         if (gui_button("Frame region", 0, 0))
-            camera_fit_box(goxel.image->active_camera, goxel.image->box);
+        {
+            float box[4][4];
+            view_box(*state, box);
+            camera_fit_box(goxel.image->active_camera, box);
+        }
+        if (state->tiled) {
+            try {
+                gui_input_int("World X", &location_input[0],
+                              -WORLD_EXTENT, WORLD_EXTENT);
+                gui_input_int("Height Y", &location_input[1],
+                              0, WORLD_HEIGHT - 1);
+                gui_input_int("World Z", &location_input[2],
+                              -WORLD_EXTENT, WORLD_EXTENT);
+                if (gui_button("Go to location", 0, 0))
+                    visit_location({ location_input[0], location_input[1],
+                                     location_input[2] }, true);
+                gui_text("Loaded terrain tiles: %zu", state->tiles.size());
+                gui_checkbox("Load terrain while navigating",
+                             &state->follow_view,
+                             "Prepare terrain when the camera moves");
+                gui_text_wrapped("All locations share this mod. Brushes and "
+                                 "shapes prepare terrain before editing.");
+                if (gui_button("Retry terrain loading", 0, 0)) {
+                    failed_tile_request.clear();
+                    visit_location(state->center, false);
+                }
+                if (gui_section_begin("Saved locations",
+                                      GUI_SECTION_COLLAPSABLE_CLOSED)) {
+                    gui_input_text("Location name", bookmark_input,
+                                   sizeof(bookmark_input));
+                    if (gui_button("Save this location", 0, 0)) {
+                        add_bookmark(bookmark_input);
+                        bookmark_input[0] = '\0';
+                    }
+                    auto root = parse("{\"items\":" + state->bookmarks + "}");
+                    const auto &items = (*root)["items"];
+                    for (unsigned i = 0; i < items.u.array.length; i++) {
+                        gui_row_begin(2);
+                        auto label = string(items[i]["name"]) + "##visit-" +
+                                     std::to_string(i);
+                        bool visit = gui_button(label.c_str(), 0, 0);
+                        label = "Remove##location-" + std::to_string(i);
+                        bool remove = gui_button(label.c_str(), 0, 0);
+                        gui_row_end();
+                        if (visit)
+                            visit_location(triple(items[i]["world"]), true);
+                        if (remove) {
+                            std::string next = "[";
+                            for (unsigned j = 0;
+                                 j < items.u.array.length; j++) {
+                                if (j == i) continue;
+                                if (next.size() > 1) next += ',';
+                                next += serialize(&items[j]);
+                            }
+                            auto normalized =
+                                    parse("{\"items\":" + next + "]}");
+                            state->bookmarks =
+                                    serialize(&(*normalized)["items"]);
+                            update_metadata_key(*state);
+                            break;
+                        }
+                    }
+                }
+                gui_section_end();
+            }
+            catch (const std::exception &error) {
+                status = error.what();
+            }
+        }
         gui_text("World origin: %d, %d, %d", state->origin[0],
                  state->origin[1], state->origin[2]);
         if (gui_combo_begin("Block", state->blocks[selected].name.c_str())) {
@@ -790,7 +1292,8 @@ extern "C" void crystal_panel(void)
         gui_text_wrapped("Export includes all authored layers, including "
                          "hidden layers. Imported static voxel objects are "
                          "editable; other entities and unknown fields are "
-                         "preserved. Native terrain is reference only.");
+                         "preserved. Every location exports together. "
+                         "Native terrain is reference only.");
         if (state->invalid)
             gui_text("Invalid block identities: %zu", state->invalid);
     }
@@ -850,6 +1353,213 @@ extern "C" void crystal_restore_state(const char *data, size_t size)
     }
 }
 
+namespace {
+void world_smoke(const char *output)
+{
+    if (!state->tiled) return;
+    state->follow_view = false;
+    goxel.painter.mode = MODE_OVER;
+    goxel.tool_radius = .5f;
+    inputs_t input = {};
+    input.window_size[0] = 1024;
+    input.window_size[1] = 768;
+    input.scale = 1;
+    input.touches[0].pos[0] = input.touches[0].pos[1] = -1;
+    auto frame = [&]() { goxel_iter(&input); goxel_render(&input); };
+    auto point = [&](int x, int z, float hit[3]) {
+        float origin[3] = { x + .5f, -z - .5f,
+                            float(state->view_max[1] + 10) };
+        float down[3] = { 0, 0, -1 }, normal[3];
+        if (!pick_ray(origin, down, hit, normal))
+            throw std::runtime_error(
+                    "World smoke could not pick the native floor");
+        float screen[3];
+        camera_project(goxel.image->active_camera, hit, goxel.gui.viewport,
+                       screen);
+        input.touches[0].pos[0] = screen[0];
+        input.touches[0].pos[1] = input.window_size[1] - screen[1];
+    };
+    auto release = [&]() {
+        input.touches[0].down[0] = false;
+        frame(); frame();
+        input.touches[0].pos[0] = -1;
+        frame();
+    };
+    auto before = cells_json();
+    image_history_push(goxel.image);
+    auto *camera = goxel.image->active_camera;
+    mat4_set_identity(camera->mat);
+    camera->dist = 128;
+    camera->ortho = false;
+    mat4_itranslate(camera->mat, 8, -8, 104 + camera->dist);
+    frame();
+    float hit[3];
+    point(15, 1, hit); frame(); frame();
+    input.touches[0].down[0] = true;
+    frame(); frame();
+    point(16, 1, hit); frame(); frame();
+    release();
+    auto seam = cells_json();
+    auto cells = parse("{\"cells\":" + seam + "}");
+    bool left = false, right = false;
+    const auto &items = (*cells)["cells"];
+    for (unsigned i = 0; i < items.u.array.length; i++) {
+        left |= number(items[i]["pos"][0]) == 15;
+        right |= number(items[i]["pos"][0]) == 16;
+    }
+    if (!left || !right) {
+        fprintf(stderr, "world boundary diagnostic: before=%s after=%s "
+                        "status=%s\n",
+                before.c_str(), seam.c_str(), status.c_str());
+        throw std::runtime_error(
+                "Mouse stroke did not cross the terrain tile edge");
+    }
+    image_undo(goxel.image);
+    if (cells_json() != before)
+        throw std::runtime_error(
+                "Boundary stroke did not undo as one operation");
+    image_redo(goxel.image);
+    if (cells_json() != seam)
+        throw std::runtime_error(
+                "Boundary stroke redo changed world coordinates");
+    action_exec2(ACTION_tool_set_shape);
+    auto *brush_shape = goxel.painter.shape;
+    goxel.painter.shape = &shape_cube;
+    frame();
+    point(15, 2, hit); frame(); frame();
+    input.touches[0].down[0] = true;
+    frame(); frame();
+    point(16, 2, hit); frame(); frame();
+    release();
+    auto shaped = cells_json();
+    if (shaped == seam)
+        throw std::runtime_error("Boundary shape did not commit");
+    image_undo(goxel.image);
+    if (cells_json() != seam)
+        throw std::runtime_error(
+                "Boundary shape did not undo as one operation");
+    image_redo(goxel.image);
+    if (cells_json() != shaped)
+        throw std::runtime_error("Boundary shape redo changed its cells");
+    image_undo(goxel.image);
+    goxel.painter.shape = brush_shape;
+    action_exec2(ACTION_tool_set_brush);
+    add_bookmark("Starting area");
+    visit_location({ 115, 109, -18 }, true);
+    state->follow_view = false;
+    add_bookmark("Meadows");
+    if (cells_json() != seam)
+        throw std::runtime_error("Changing locations lost authored content");
+    frame();
+    point(115, -18, hit); frame(); frame();
+    input.touches[0].down[0] = true;
+    frame(); frame();
+    release();
+    auto complete = cells_json();
+    if (complete == seam)
+        throw std::runtime_error(
+                "Distant location mouse editing did not commit");
+    image_undo(goxel.image);
+    if (cells_json() != seam)
+        throw std::runtime_error("Distant edit undo affected another location");
+    image_redo(goxel.image);
+    if (cells_json() != complete)
+        throw std::runtime_error("Distant edit redo lost a location");
+    auto project = std::string(output) + ".world.gox";
+    auto center = state->center;
+    auto bookmarks = state->bookmarks;
+    save_to_file(goxel.image, project.c_str());
+    if (load_from_file(project.c_str(), true) != 0 ||
+        cells_json() != complete || state->center != center ||
+        state->bookmarks != bookmarks) {
+        fprintf(stderr, "world reopen diagnostic: cells=%s expected=%s "
+                        "location=%s expectedLocation=%s bookmarks=%s "
+                        "expectedBookmarks=%s\n",
+                cells_json().c_str(), complete.c_str(),
+                triple(state->center).c_str(), triple(center).c_str(),
+                state->bookmarks.c_str(), bookmarks.c_str());
+        throw std::runtime_error(
+                "World document, location or bookmarks did not reopen");
+    }
+    state->follow_view = false;
+    auto exported = std::string(output) + ".world.json";
+    export_project(exported.c_str());
+    auto first = parse(read_file(exported));
+    auto assignments = state->identities;
+    save_to_file(goxel.image, project.c_str());
+    if (load_from_file(project.c_str(), true) != 0 ||
+        state->identities != assignments || cells_json() != complete)
+        throw std::runtime_error(
+                "World entity reservations did not survive reopening");
+    state->follow_view = false;
+    export_project((std::string(output) + ".world-again.json").c_str());
+    auto again = parse(read_file(std::string(output) + ".world-again.json"));
+    if (serialize(&(*first)["Entities"]) != serialize(&(*again)["Entities"]))
+        throw std::runtime_error(
+                "Repeated world export changed entity IDs or fields");
+
+    state->follow_view = true;
+    camera = goxel.image->active_camera;
+    mat4_set_identity(camera->mat);
+    camera->dist = 128;
+    mat4_itranslate(camera->mat, 1.5f, -1.5f, 99.5f + camera->dist);
+    float navigation[4][4];
+    mat4_copy(camera->mat, navigation);
+    crystal_follow_view(camera);
+    if (state->center != std::array<int, 3>{ 1, 99, 1 } ||
+        cells_json() != complete || !mat4_equal(camera->mat, navigation))
+        throw std::runtime_error(
+                "Camera navigation changed authored content or camera pose");
+    state->follow_view = false;
+    visit_location(center, true);
+
+    // Force a neighboring cache failure after a successful drag segment
+    frame();
+    point(115, -18, hit); frame(); frame();
+    std::array<int, 3> neighbor{
+        state->view_max[0], int(std::floor(hit[2])), state->center[2]
+    };
+    auto end = neighbor;
+    for (int k = 0; k < 3; k++) end[k]++;
+    Temporary temp;
+    auto prepared = temp.directory / "neighbor.json";
+    run_helper({ "tiles", "--context", state->path, "--min", triple(neighbor),
+                 "--max", triple(end), "--output", prepared.string() });
+    auto tile = parse(read_file(prepared, MAX_STATE));
+    auto mesh_path =
+            std::filesystem::path(string((*tile)["tiles"][0]["path"])) /
+            "reference.mesh";
+    struct RestoreAsset {
+        std::filesystem::path path;
+        std::string bytes;
+        ~RestoreAsset() { std::ofstream(path, std::ios::binary) << bytes; }
+    } restore{ mesh_path, read_file(mesh_path) };
+    std::ofstream(mesh_path, std::ios::binary | std::ios::app) << "tamper";
+    auto reference_count = state->reference->nb_vertices;
+    auto stable = cells_json();
+    input.touches[0].down[0] = true;
+    frame(); frame();
+    goxel.tool_radius = 32;
+    frame(); frame();
+    release();
+    goxel.tool_radius = .5f;
+    if (cells_json() != stable ||
+        state->reference->nb_vertices != reference_count ||
+        status.find("cancelled") == std::string::npos)
+        throw std::runtime_error(
+                "Failed boundary loading committed a partial stroke or view");
+    failed_tile_request.clear();
+    std::vector<uint8_t> pixels(1024 * 768 * 4);
+    goxel_render_to_buf(pixels.data(), 1024, 768, 4);
+    img_write(pixels.data(), 1024, 768, 4,
+              (std::string(output) + ".world.png").c_str());
+    printf("crystal-goxel world smoke: boundaryStroke=ok distantEdit=ok "
+           "boundaryShape=ok cameraFollow=ok undoRedo=ok bookmarks=ok "
+           "persistence=ok combinedExport=ok "
+           "stableIdentities=ok failedStrokeAtomicity=ok\n");
+}
+} // namespace
+
 extern "C" int crystal_smoke(const char *output)
 {
     try {
@@ -869,6 +1579,12 @@ extern "C" int crystal_smoke(const char *output)
         float origin[3] = { state->size[0] * .5f + .5f,
                             -state->size[2] * .5f - .5f,
                             float(state->size[1] + 10) };
+        if (state->tiled) {
+            origin[0] = state->center[0] + .5f;
+            origin[1] = -state->center[2] - .5f;
+            origin[2] = state->view_max[1] + 10;
+            state->follow_view = false;
+        }
         float down[3] = { 0, 0, -1 }, hit[3], normal[3];
         if (!pick_ray(origin, down, hit, normal))
             throw std::runtime_error("Native reference picking failed");
@@ -1035,14 +1751,11 @@ extern "C" int crystal_smoke(const char *output)
             throw std::runtime_error(
                     "Export lost an unknown large numeric field");
 
-        auto metadata = saved_json(saved);
-        auto unavailable =
-                "{\"format\":1,\"context\":" +
-                quote(source_path + ".missing") +
-                ",\"manifest\":" + quote(string((*metadata)["manifest"])) +
-                ",\"source\":" + quote(string((*metadata)["source"])) +
-                ",\"managed\":" + serialize(&(*metadata)["managed"]) +
-                ",\"newObjectsSolid\":false}";
+        auto unavailable = saved;
+        auto context_field = "\"context\":" + quote(context_path);
+        unavailable.replace(unavailable.find(context_field),
+                            context_field.size(),
+                            "\"context\":" + quote(source_path + ".missing"));
         crystal_reset();
         crystal_restore_state(unavailable.data(), unavailable.size());
         char *retained = nullptr;
@@ -1075,6 +1788,7 @@ extern "C" int crystal_smoke(const char *output)
         if (std::filesystem::exists(invalid_path))
             throw std::runtime_error(
                     "Oversized state save touched its destination");
+        world_smoke(output);
         printf("crystal-goxel smoke: nativeVertices=%d mouseBrush=ok "
                "mouseErase=ok undoRedo=ok picking=ok exportDialog=ok "
                "persistence=ok "

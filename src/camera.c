@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "crystal.h"
 #include "xxhash.h"
 
 camera_t *camera_new(const char *name)
@@ -66,7 +67,19 @@ static void compute_clip(const float view_mat[4][4], float *near_, float *far_)
     float vertices[8][3];
     const volume_t *volume = goxel_get_layers_volume(goxel.image);
     volume_iterator_t iter;
+    float reference[4][4];
 
+    if (crystal_reference_bounds(reference)) {
+        // Reference terrain affects clipping without becoming a paint boundary
+        box_get_vertices(reference, vertices);
+        for (i = 0; i < 8; i++) {
+            mat4_mul_vec3(view_mat, vertices[i], p);
+            if (p[2] < 0) {
+                n = min(n, -p[2] - margin);
+                f = max(f, -p[2] + margin);
+            }
+        }
+    }
     if (!box_is_null(goxel.image->box)) {
         box_get_vertices(goxel.image->box, vertices);
         for (i = 0; i < 8; i++) {
