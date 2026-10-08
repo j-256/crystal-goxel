@@ -28,59 +28,8 @@ internal static class Context
         Directory.CreateDirectory(staging);
         try
         {
-            var atlas = Atlas(Path.Combine(game.Installation, "Content", "Textures", "Voxel.dat"));
-            File.WriteAllBytes(Path.Combine(staging, "atlas.png"), atlas);
-            var blocks = new List<object>();
-            using (var palette = new BinaryWriter(File.Create(Path.Combine(staging, "palette.mesh"))))
-            {
-                palette.Write("CGP1"u8);
-                for (var id = 1; id < 256; id++)
-                {
-                    if (!game.Visible((byte)id)) continue;
-                    var definition = game.Definitions[id];
-                    var maxVariant = definition.GetProperty("MaxVariant").GetInt32();
-                    if (maxVariant < 0 || maxVariant > 3) throw new InvalidDataException("Unexpected block variant limit");
-                    blocks.Add(new { id, name = definition.GetProperty("Name").GetString(), maxVariant, collides = definition.GetProperty("Collides").GetBoolean() });
-                    for (var variant = 0; variant <= maxVariant; variant++)
-                    {
-                        var vertices = game.Build(new Cell((byte)id, (byte)(variant << 6), ushort.MaxValue), (_, _, _) => Cell.Air);
-                        palette.Write(id); palette.Write(variant); palette.Write(vertices.Length / 4 * 6);
-                        WriteVertices(palette, vertices, 0, 0, 0, true);
-                    }
-                }
-            }
-            var visible = 0;
-            using var biome = new BinaryWriter(File.Create(Path.Combine(staging, "biomes.bin")));
-            using var owners = new BinaryWriter(File.Create(Path.Combine(staging, "reference.cells")));
-            owners.Write("CGC1"u8); owners.Write(0);
-            var ownerCount = 0;
-            using (var mesh = new BinaryWriter(File.Create(Path.Combine(staging, "reference.mesh"))))
-            {
-                mesh.Write("CGM1"u8); mesh.Write(0);
-                var count = 0;
-                for (var x = origin[0]; x < origin[0] + size[0]; x++)
-                    for (var y = origin[1]; y < origin[1] + size[1]; y++)
-                        for (var z = origin[2]; z < origin[2] + size[2]; z++)
-                        {
-                            biome.Write(world.Biome(x, y, z));
-                            var cell = world.Get(x, y, z);
-                            if (!game.Visible(cell.Type)) continue;
-                            var vertices = game.Build(cell, (dx, dy, dz) => world.Get(x + dx, y + dy, z + dz));
-                            if (vertices.Length == 0) continue;
-                            visible++;
-                            WriteVertices(mesh, vertices, x - origin[0], y - origin[1], z - origin[2], false);
-                            count += vertices.Length / 4 * 6;
-                            var owner = ToEditor([x, y, z], origin);
-                            for (var triangle = 0; triangle < vertices.Length / 4 * 2; triangle++)
-                            {
-                                foreach (var coordinate in owner) owners.Write(coordinate);
-                                ownerCount++;
-                            }
-                        }
-                mesh.Seek(4, SeekOrigin.Begin); mesh.Write(count);
-            }
-            biome.Dispose();
-            owners.Seek(4, SeekOrigin.Begin); owners.Write(ownerCount); owners.Dispose();
+            var blocks = WriteAssets(game, staging);
+            var visible = WriteRegion(game.Visible, game.Build, world, origin, size, staging);
             var files = new[] { "reference.mesh", "reference.cells", "palette.mesh", "atlas.png", "biomes.bin" }.ToDictionary(n => n, n => NativeGame.Hash(File.ReadAllBytes(Path.Combine(staging, n))));
             var manifest = new
             {
@@ -102,6 +51,71 @@ internal static class Context
         catch { Directory.Delete(staging, true); throw; }
     }
 
+    internal static List<object> WriteAssets(NativeGame game, string output)
+    {
+        var atlas = Atlas(Path.Combine(game.Installation, "Content", "Textures", "Voxel.dat"));
+        File.WriteAllBytes(Path.Combine(output, "atlas.png"), atlas);
+        var blocks = new List<object>();
+        using (var palette = new BinaryWriter(File.Create(Path.Combine(output, "palette.mesh"))))
+        {
+            palette.Write("CGP1"u8);
+            for (var id = 1; id < 256; id++)
+            {
+                if (!game.Visible((byte)id)) continue;
+                var definition = game.Definitions[id];
+                var maxVariant = definition.GetProperty("MaxVariant").GetInt32();
+                if (maxVariant < 0 || maxVariant > 3) throw new InvalidDataException("Unexpected block variant limit");
+                blocks.Add(new { id, name = definition.GetProperty("Name").GetString(), maxVariant, collides = definition.GetProperty("Collides").GetBoolean() });
+                for (var variant = 0; variant <= maxVariant; variant++)
+                {
+                    var vertices = game.Build(new Cell((byte)id, (byte)(variant << 6), ushort.MaxValue), (_, _, _) => Cell.Air);
+                    palette.Write(id); palette.Write(variant); palette.Write(vertices.Length / 4 * 6);
+                    WriteVertices(palette, vertices, 0, 0, 0, true);
+                }
+            }
+        }
+        return blocks;
+    }
+
+    internal static int WriteRegion(Func<byte, bool> visibleBlock,
+        Func<Cell, Func<int, int, int, Cell>, NativeVertex[]> build,
+        NativeWorld world, int[] origin, int[] size, string output)
+    {
+        var visible = 0;
+        using var biome = new BinaryWriter(File.Create(Path.Combine(output, "biomes.bin")));
+        using var owners = new BinaryWriter(File.Create(Path.Combine(output, "reference.cells")));
+        owners.Write("CGC1"u8); owners.Write(0);
+        var ownerCount = 0;
+        using (var mesh = new BinaryWriter(File.Create(Path.Combine(output, "reference.mesh"))))
+        {
+            mesh.Write("CGM1"u8); mesh.Write(0);
+            var count = 0;
+            for (var x = origin[0]; x < origin[0] + size[0]; x++)
+                for (var y = origin[1]; y < origin[1] + size[1]; y++)
+                    for (var z = origin[2]; z < origin[2] + size[2]; z++)
+                    {
+                        biome.Write(world.Biome(x, y, z));
+                        var cell = world.Get(x, y, z);
+                        if (!visibleBlock(cell.Type)) continue;
+                        var vertices = build(cell, (dx, dy, dz) => world.Get(x + dx, y + dy, z + dz));
+                        if (vertices.Length == 0) continue;
+                        visible++;
+                        WriteVertices(mesh, vertices, x - origin[0], y - origin[1], z - origin[2], false);
+                        count += vertices.Length / 4 * 6;
+                        var owner = ToEditor([x, y, z], origin);
+                        for (var triangle = 0; triangle < vertices.Length / 4 * 2; triangle++)
+                        {
+                            foreach (var coordinate in owner) owners.Write(coordinate);
+                            ownerCount++;
+                        }
+                    }
+            mesh.Seek(4, SeekOrigin.Begin); mesh.Write(count);
+        }
+        biome.Dispose();
+        owners.Seek(4, SeekOrigin.Begin); owners.Write(ownerCount); owners.Dispose();
+        return visible;
+    }
+
     private static void WriteVertices(BinaryWriter writer, NativeVertex[] vertices, int x, int y, int z, bool template)
     {
         ReadOnlySpan<int> triangles = [0, 1, 2, 2, 1, 3];
@@ -120,7 +134,7 @@ internal static class Context
             }
     }
 
-    private static byte[] Atlas(string path)
+    internal static byte[] Atlas(string path)
     {
         using var reader = new BinaryReader(File.OpenRead(path));
         reader.ReadUInt16();

@@ -7,6 +7,9 @@ Usage: crystal-bridge COMMAND [OPTIONS]
 Offline Crystal Project native world context and Crystal Edit project bridge
 
   prepare --game DIR --center X,Y,Z --size X,Y,Z --output NEW_DIR
+  world   --game DIR --output NEW_DIR
+  view    --context world.json --center X,Y,Z --output NEW_VIEW.json
+  tiles   --context world.json --min X,Y,Z --max X,Y,Z --output NEW_VIEW.json
   import  --context context.json --source PROJECT.json --output snapshot.json
   export  --context context.json --snapshot snapshot.json --output NEW_PROJECT.json
   validate --context context.json
@@ -17,6 +20,11 @@ Offline Crystal Project native world context and Crystal Edit project bridge
 Options accept --name VALUE or --name=VALUE. Paths may contain spaces.
 Short options: -g game, -c center, -s size, -o output, -k context,
 -i source/snapshot, -h help. Short values can be glued to their option.
+Tile bounds are game coordinates, with an inclusive minimum and exclusive maximum.
+World caches use format 2, native-aligned 16-cell tiles and shared fingerprinted assets.
+view prepares the neighboring tiles around a location; tiles prepares up to 125 tiles.
+No environment variables are required. Native operations need the supported game;
+synthetic tests and validation of existing cache files do not need it.
 Exit status: 0 success, 1 runtime failure, 2 usage/precondition, 3 missing dependency
 Game resources stay local. Exports are Crystal Edit voxel NPCs, with native terrain
 kept as reference. Only the inspected Windows 1.6.9.0 installation is supported.
@@ -66,6 +74,27 @@ try
     string Required(string key) => options.Remove(key, out var value) ? value : throw new ArgumentException("Missing --" + key);
     switch (args[0])
     {
+        case "world":
+            {
+                var game = Required("game"); var output = Required("output");
+                if (options.Count != 0) throw new ArgumentException("Unknown option");
+                TiledContext.Create(game, output); break;
+            }
+        case "view":
+        case "tiles":
+            {
+                var path = Required("context"); var output = Required("output");
+                int[] min, max;
+                if (args[0] == "view")
+                    (min, max) = TiledContext.ViewBounds(Context.Triple(Required("center")));
+                else
+                {
+                    min = Context.Triple(Required("min")); max = Context.Triple(Required("max"));
+                }
+                if (options.Count != 0) throw new ArgumentException("Unknown option");
+                using var context = new TiledContext(path, Projects.Read(path));
+                context.Prepare(min, max, output); break;
+            }
         case "prepare":
             {
                 var game = Required("game"); var center = Context.Triple(Required("center"));

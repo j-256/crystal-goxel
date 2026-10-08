@@ -177,6 +177,7 @@ internal static class Projects
 
     internal static void ValidateContext(string path, JsonObject context)
     {
+        if (TiledContext.IsTiled(context)) { TiledContext.Validate(path, context); return; }
         if (context["format"]?.GetValue<int>() != 1 || context["executableSha256"]?.GetValue<string>() != NativeGame.ReviewedExecutable || context["worldSha256"]?.GetValue<string>() != NativeGame.ReviewedWorld || context["voxelSha256"]?.GetValue<string>() != NativeGame.ReviewedVoxels) throw new InvalidDataException("Unsupported native context");
         var size = Ints(context["size"]!); var origin = Ints(context["origin"]!);
         if (size.Any(v => v < 8 || v > 96) || (long)size[0] * size[1] * size[2] > 300_000) throw new InvalidDataException("Invalid context bounds");

@@ -10,7 +10,7 @@ internal static class SyntheticTests
     {
         var scratch = Path.Combine(Path.GetTempPath(), "crystal-goxel-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
-        try { ProjectsRoundTrip(scratch); WorldArchive(scratch); }
+        try { ProjectsRoundTrip(scratch); WorldArchive(scratch); TileTests.Run(scratch); }
         finally { Directory.Delete(scratch, true); }
     }
 
