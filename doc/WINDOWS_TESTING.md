@@ -11,7 +11,7 @@ The following record describes validation on 2026-10-08. The Windows package was
 | Windows package | Cross-build, bundled runtime and native DLL import checks passed | Native MSYS2 package build and execution on an x64 Windows desktop |
 | Windows helper integration | Real child argument and Unicode path round trips, concurrent launches, output draining, error reporting and temporary cleanup passed in the VM | Graphical application use of the helper on the target desktop |
 | Native world operations | World creation, tiles across boundaries and location lookup passed in the VM | Windows reference rendering, navigation, painting and cache behavior through the GUI |
-| Original resource readers | Crystal Edit serialization, game deserialization and construction physics passed in Windows CPU fixtures | Crystal Edit UI compilation and a complete in-game construction test |
+| Original resource readers | Crystal Edit serialization, game deserialization and construction physics passed in Windows CPU fixtures | Crystal Edit UI review/editing and a complete in-game construction test |
 | Windows graphics | Startup failure reported the unsupported driver and exited cleanly | A successful Windows graphical smoke run and interactive review |
 | Mac graphics | Native rendering, painting, navigation, undo/redo, save/reopen and combined exports passed on Apple Silicon | These results do not validate Windows graphics or native dialogs |
 | Windows CI | Package, process and synthetic checks are configured in the workflow | Remote workflow execution was unverified in this validation record; these checks do not open the graphical editor or use game resources |
@@ -39,7 +39,7 @@ If the window cannot open, capture the terminal diagnostic and your graphics-dri
 
 ## Checks with the supported game
 
-Use your own Windows Crystal Project 1.6.9.0 resources and the inspected Crystal Edit source-project format. Create a fresh private world cache from Windows so its installation path belongs to that machine; do not reuse a Mac installation path. Choose new cache and output names for each smoke run. The cache folder must not already exist, and its parent folder must be writable.
+Use your own Windows Crystal Project 1.6.9.0 resources and Crystal Edit project format 34. Create a fresh private world cache from Windows so its installation path belongs to that machine; do not reuse a Mac installation path. Choose new cache and output names for each smoke run. The cache folder must not already exist, and its parent folder must be writable.
 
 ```powershell
 $package = 'C:\tools\Crystal Goxel Windows'
@@ -60,8 +60,8 @@ For manual review:
 1. Create and open a world through the Crystal Project panel using the native folder dialogs. Check paths containing spaces and non-ASCII characters
 2. Visit Spawn Point, use Move up / Move down and Page Up / Page Down in tilted and top-down views, then pan with Follow camera enabled. Check whether height movement and terrain loading feel usable
 3. Paint and erase across a tile boundary, undo and redo, and edit at a distant location. Return to the first location and confirm its authored work remains intact
-4. Save and reopen the `.gox`, including saved locations. Export to a new Crystal Edit JSON and confirm both locations are included. Cancel the export dialog and check that work remains available
-5. Open the source in Crystal Edit, compile it and test a disposable mod with a backed-up save. Check placement, variants, solid collision and non-solid decoration. Native terrain must remain unchanged
+4. Save and reopen the `.gox`, including saved locations. Export to a new Crystal Edit JSON and confirm both locations are included. If export assigns new IDs and marks the `.gox` as changed, save and reopen it again, then repeat the export to a new file and check that IDs remain stable. Cancel the export dialog and check that work remains available
+5. Open the exported JSON in Crystal Edit to review or edit the project, then test a disposable mod with a backed-up save. The JSON itself is the project, such as `mod.json`; no compilation step is required. Check placement, variants, solid collision and non-solid decoration. Native terrain must remain unchanged
 6. Record performance with a representative larger construction. The smoke benchmark measures static rendering and readback, not interactive frame rate or in-game entity performance
 
 A failed or blocked step is useful evidence. Report it separately from successful steps, including the point where the workflow stopped.

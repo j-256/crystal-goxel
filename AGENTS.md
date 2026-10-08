@@ -8,4 +8,6 @@ Never track game assemblies, assets, decoded databases, decompiled code, user pr
 
 Native context is reference content. It must never enter Crystal Edit authored exports. Preserve unsupported project fields and unrelated entities. Report unsupported state instead of guessing material identity or conditional NPC behavior.
 
+A `mod.json` file is the Crystal Edit project itself. Export produces project JSON that Crystal Edit can open directly; there is no Crystal Edit compilation step. Successful tiled export can allocate entity IDs and establish project identity in the open document. Export does not save the `.gox`; saving afterward persists those assignments for later exports. Keep the editable `.gox` and the exported project JSON distinct in workflow documentation.
+
 Run focused bridge tests and the native render smoke check before review. Keep the canonical checkout on main, use wt task worktrees, and obtain explicit approval before local integration or teardown. Never push without a separate explicit request.

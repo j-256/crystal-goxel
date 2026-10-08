@@ -6,7 +6,7 @@ Construction exports as voxel NPC entities. Native terrain stays read-only: pain
 
 ## Get started
 
-You need your own **Windows Crystal Project 1.6.9.0 installation** and Crystal Edit to review and compile exported source projects. The bridge checks the exact game resources; other versions and the native Mac game installation are not accepted. Game files are selected locally and are not bundled with this repository or the app.
+You need your own **Windows Crystal Project 1.6.9.0 installation**. Crystal Edit can open the exported JSON for review and further editing: `mod.json` is the Crystal Edit project itself, with no compilation step. The bridge checks the exact game resources; other versions and the native Mac game installation are not accepted. Game files are selected locally and are not bundled with this repository or the app.
 
 The Windows package targets x64 Windows 11 with an OpenGL-capable graphics driver. It includes its own helper runtime. The process launcher, packaged helper, synthetic checks and native world preparation have been exercised in a Windows 11 ARM64 VM running the x64 package under emulation. Windows graphical authoring, native file dialogs and Crystal Edit UI behavior remain unverified. The Windows CI job is configured to repeat the process and synthetic checks without game files; those checks do not open the graphical editor. The Mac desktop has been exercised on Apple Silicon. See the [detailed guide](CRYSTAL_BRIDGE.md#build-and-open) for packaging limits.
 
@@ -54,11 +54,14 @@ The cache is the **native context**: the terrain, textures and block definitions
 2. Select a **Block** and **Variant** in the Crystal Project panel, then use the brush or shape tools to build. The ordinary Goxel color palette does not carry Crystal block IDs
 3. Save your editable work as a `.gox`. Use **Saved locations** for your own named bookmarks, and keep building at other places in the same document
 4. Click **Export Crystal Edit project** and choose a new JSON filename. Every authored location exports together, including content outside the visible terrain and in hidden layers. Export does not overwrite existing files
-5. Save the `.gox` again to retain the allocated entity IDs, then open the exported JSON in Crystal Edit to review and compile it. Test the compiled mod in the game
+5. Save the `.gox` again if export marks it as changed. Export can allocate entity IDs and establish the mod's project identity; saving preserves those assignments for later exports
+6. Open the exported JSON in Crystal Edit to review or edit the project, then test the mod in the game. The JSON is already the project, so there is no compilation step
+
+Export writes the JSON without saving the `.gox`. The exported project is usable immediately, even before that additional save; saving the `.gox` retains the IDs and project identity for future work. Repeating an export with unchanged assignments does not by itself require another save.
 
 New objects stay fixed in place. **Solid new objects** enables full-cell collision; turn it off for non-solid decoration. Imported objects keep their original physics settings.
 
-To edit an existing Crystal Edit source JSON, use **Import Crystal Edit project** in an empty authored document. Supported stationary, unconditional voxel NPCs become editable. Other entities and unknown fields remain in the preserved source, with unsupported objects reported rather than guessed.
+To edit an existing Crystal Edit project JSON, use **Import Crystal Edit project** in an empty authored document. Supported stationary, unconditional voxel NPCs become editable. Other entities and unknown fields remain in the preserved source, with unsupported objects reported rather than guessed.
 
 ## Move around the world
 
@@ -85,7 +88,7 @@ Game **Height Y** is Goxel's vertical **Z** axis. The height controls move along
 | `world.json` | Reference-cache manifest: game version, installation path, fingerprints, tile size and origin, and block palette |
 | Cache assets and terrain tiles | Generated native textures and geometry beside the manifest |
 | `locations.json` | Generated vanilla home points and fixed landmarks, separate from project bookmarks |
-| Exported Crystal Edit `.json` | Source project containing authored entities for Crystal Edit |
+| Exported Crystal Edit `.json` | The mod project itself, such as `mod.json`, readable by Crystal Edit |
 
 Keep the context directory with your `.gox`; the project does not embed native game assets. The selected installation is needed to prepare uncached areas, while already cached terrain and locations can be reopened offline. Generated reference files contain game content and should stay with your private game resources, outside this repository. See the [detailed guide](CRYSTAL_BRIDGE.md#build-and-open) for relocating a context or recovering missing resources.
 
