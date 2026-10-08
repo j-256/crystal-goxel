@@ -19,6 +19,9 @@ import glob
 import os
 import sys
 
+with open('CRYSTAL_VERSION') as version_file:
+    crystal_version = version_file.read().strip()
+
 vars = Variables('settings.py')
 vars.AddVariables(
     EnumVariable('mode', 'Build mode', 'debug',
@@ -82,6 +85,7 @@ if env['mode'] in ('profile', 'debug'):
     env.Append(CCFLAGS='-g')
 
 env.Append(CPPPATH=['src', '.'])
+env.Append(CPPDEFINES=[('CRYSTAL_VERSION_STR', '\\"' + crystal_version + '\\"')])
 env.Append(CCFLAGS=['-include', '$config_file'])
 
 # Get all the c and c++ files in src, recursively.

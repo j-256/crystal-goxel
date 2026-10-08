@@ -6,6 +6,8 @@ Construction exports as voxel NPC entities. Native terrain stays read-only: pain
 
 ## Get started
 
+Preview downloads are prepared as versioned Windows x64 and Apple Silicon Mac ZIPs with their own helper runtimes. Use the platform ZIP from this repository's GitHub Releases when a release is available; upstream Goxel downloads do not include the Crystal Project bridge. See [release preparation and publication](doc/RELEASING.md) for build provenance, checksums and the public-only CI policy. Windows graphical editing is experimental; Mac packages are ad hoc signed and not notarized.
+
 You need your own **Windows Crystal Project 1.6.9.0 installation**. Crystal Edit can open the exported JSON for review and further editing: `mod.json` is the Crystal Edit project itself, with no compilation step. The bridge checks the exact game resources; other versions and the native Mac game installation are not accepted. Game files are selected locally and are not bundled with this repository or the app.
 
 The Windows package targets x64 Windows 11 with an OpenGL-capable graphics driver. It includes its own helper runtime. The process launcher, packaged helper, synthetic checks and native world preparation have been exercised in a Windows 11 ARM64 VM running the x64 package under emulation. Windows graphical authoring, native file dialogs and Crystal Edit UI behavior remain unverified. The Windows CI job is configured to repeat the process and synthetic checks without game files; those checks do not open the graphical editor. The Mac desktop has been exercised on Apple Silicon. See the [detailed guide](CRYSTAL_BRIDGE.md#build-and-open) for packaging limits.
@@ -29,7 +31,7 @@ Open `dist/Crystal Goxel Windows/CrystalGoxel.exe`. Keep the complete folder tog
 
 ### Build the Mac app
 
-With Xcode command line tools, Python 3 and .NET SDK 10 installed, run from the repository root:
+With Xcode command line tools, Python 3.11 or later and .NET SDK 10 installed, run from the repository root:
 
 ```sh
 brew install cmake pkgconf

@@ -78,6 +78,10 @@
 #include <string.h>
 
 #define GOXEL_VERSION_STR "0.15.2"
+// Other upstream build entrypoints remain identifiable as development builds
+#ifndef CRYSTAL_VERSION_STR
+#   define CRYSTAL_VERSION_STR "development"
+#endif
 #ifndef GOXEL_DEFAULT_THEME
 #   define GOXEL_DEFAULT_THEME "dark"
 #endif

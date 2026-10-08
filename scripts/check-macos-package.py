@@ -43,6 +43,7 @@ def check(app):
                 if stream.read(4) in MACH_O_MAGIC:
                     binaries.append(path)
     bundled_names = {path.name for path in binaries}
+    minimum = tuple(map(int, MACOS_MINIMUM.split(".")))
     for binary in binaries:
         if run("lipo", "-archs", str(binary)).strip() != "arm64":
             raise ValueError(f"{binary.name} is not an arm64 release binary")
@@ -53,7 +54,7 @@ def check(app):
             targets = re.findall(r"LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([0-9.]+)", commands)
         if not targets:
             raise ValueError(f"No macOS deployment target in {binary.name}")
-        if any(tuple(map(int, target.split(".")[:2])) > (15, 0)
+        if any(tuple(map(int, target.split(".")[:2])) > minimum
                for target in targets):
             raise ValueError(f"{binary.name} requires macOS newer than {MACOS_MINIMUM}: {targets}")
         for line in run("otool", "-L", str(binary)).splitlines()[1:]:

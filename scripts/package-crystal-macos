@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/package-crystal-macos [-h|--help]
 Build an offline Crystal Goxel.app for Apple Silicon, targeting macOS 15
 
-Requires Xcode command line tools, Python 3, .NET SDK 10, pkg-config and CMake
+Requires Xcode command line tools, Git, Python 3.11+, .NET SDK 10, pkg-config and CMake
 The build downloads pinned GLFW source, SCons and .NET runtime dependencies
 The resulting app needs neither Python, .NET nor Homebrew to run
 Game resources are selected separately; none are bundled with the app
@@ -26,7 +26,7 @@ if [ "$(uname -s)" != Darwin ]; then
     printf '%s\n' 'This package command requires macOS' >&2
     exit 2
 fi
-for dependency in python3 dotnet pkg-config cmake curl shasum tar clang otool install_name_tool codesign plutil lipo; do
+for dependency in git python3 dotnet pkg-config cmake curl shasum tar clang otool install_name_tool codesign plutil lipo; do
     if ! command -v "$dependency" >/dev/null 2>&1; then
         printf 'Missing dependency: %s\n' "$dependency" >&2
         exit 3
@@ -42,6 +42,7 @@ case "$(uname -m)" in
 esac
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_root"
+version="$(python3 scripts/crystal-release.py version --numeric)"
 if [ ! -x .build-env/bin/scons ]; then
     python3 -m venv .build-env >&2
     .build-env/bin/pip install 'scons==4.10.1' >&2
@@ -98,13 +99,15 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>CFBundleIdentifier</key><string>org.crystal-goxel.prototype</string>
 <key>CFBundleName</key><string>Crystal Goxel</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleShortVersionString</key><string>$version</string>
+<key>CFBundleVersion</key><string>$version</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>$minimum_macos</string>
 </dict></plist>
 PLIST
 cp COPYING "$app/Contents/Resources/Goxel-LICENSE.txt"
 cp licenses/GLFW-LICENSE.md "$app/Contents/Resources/GLFW-LICENSE.txt"
+python3 scripts/crystal-release.py stamp "$app" --platform macos-arm64 >&2
 plutil -lint "$app/Contents/Info.plist" >&2
 codesign --force --sign - "$app/Contents/Frameworks/libglfw.3.dylib" >&2
 codesign --force --sign - "$app/Contents/MacOS/goxel" >&2

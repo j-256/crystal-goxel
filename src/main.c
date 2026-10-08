@@ -171,7 +171,8 @@ static void parse_options(int argc, char **argv, args_t *args)
             print_help();
             exit(0);
         case OPT_VERSION:
-            printf("Crystal Goxel (Goxel " GOXEL_VERSION_STR ")\n");
+            printf("Crystal Goxel " CRYSTAL_VERSION_STR
+                   " (Goxel " GOXEL_VERSION_STR ")\n");
             exit(0);
         case OPT_SCRIPT:
             args->script = optarg;

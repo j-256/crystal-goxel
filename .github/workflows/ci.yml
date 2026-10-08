@@ -1,36 +1,47 @@
-name: ci
+name: Crystal Goxel
 on:
   push:
-    # branches: [ master ] # Uncomment if you want to only run the workflow when pushing on to the master branch
+    branches: [main]
+    tags: ['crystal-v*']
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: crystal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
-  windows_x86_64:
-    runs-on: windows-latest
+  windows_x64:
+    # Skip on GitHub before allocating a private-repository runner
+    if: ${{ github.event.repository.private == false }}
+    runs-on: windows-2022
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
-
+          persist-credentials: false
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           path-type: inherit
           update: true
           install: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw mingw-w64-x86_64-libtre-git mingw-w64-x86_64-zlib scons make git
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-
-      - name: Build Crystal Goxel package
+      - name: Check release tag
         run: |
-          scripts/package-crystal-windows
-
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/crystal-release.py version --tag "${GITHUB_REF#refs/tags/}"
+          fi
+      - name: Build portable Crystal Goxel
+        run: scripts/package-crystal-windows
       - name: Check native helper process contract
         timeout-minutes: 5
         run: |
@@ -41,8 +52,7 @@ jobs:
             build/host-manifest.o -lole32 -o build/crystal-host-test.exe
           ./build/crystal-host-test.exe --bridge \
             'dist/Crystal Goxel Windows/Bridge/crystal-bridge.exe'
-
-      - name: Check packaged helper
+      - name: Check portable helper and editor
         shell: pwsh
         timeout-minutes: 10
         run: |
@@ -55,95 +65,108 @@ jobs:
             & "$package/CrystalGoxel.exe" --help
             if ($LASTEXITCODE -ne 0) { throw 'Portable editor launch failed' }
           } finally { Pop-Location }
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Archive release download
+        run: |
+          version="$(python3 scripts/crystal-release.py version)"
+          python3 scripts/crystal-release.py archive 'dist/Crystal Goxel Windows' \
+            --platform windows-x64 --output "dist/assets/Crystal-Goxel-$version-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
         with:
           name: crystal-goxel-windows-x64
-          path: dist/Crystal Goxel Windows/
+          path: dist/assets/*.zip
           if-no-files-found: error
+          retention-days: 3
 
-  linux_x86_64:
-    runs-on: ubuntu-latest
+  macos_arm64:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check release tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/crystal-release.py version --tag "${GITHUB_REF#refs/tags/}"
+          fi
+      - name: Install build tools
+        run: brew install cmake pkgconf
+      - name: Build Crystal Goxel app
+        run: scripts/package-crystal-macos
+      - name: Check native helper process contract
+        timeout-minutes: 5
+        run: |
+          clang++ -std=c++17 -Wall -Wextra -Werror \
+            tests/crystal_host_test.cpp src/crystal_host.cpp -o build/crystal-host-test
+          build/crystal-host-test --bridge 'dist/Crystal Goxel.app/Contents/Resources/Bridge/crystal-bridge'
+      - name: Check portable helper and editor
+        timeout-minutes: 10
+        run: |
+          package="$RUNNER_TEMP/Crystal Goxel 雪 spaces.app"
+          ditto 'dist/Crystal Goxel.app' "$package"
+          cd "$RUNNER_TEMP"
+          "$package/Contents/Resources/Bridge/crystal-bridge" test
+          "$package/Contents/MacOS/CrystalGoxel" --help
+      - name: Archive release download
+        run: |
+          version="$(python3 scripts/crystal-release.py version)"
+          python3 scripts/crystal-release.py archive 'dist/Crystal Goxel.app' \
+            --platform macos-arm64 --output "dist/assets/Crystal-Goxel-$version-macos-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crystal-goxel-macos-arm64
+          path: dist/assets/*.zip
+          if-no-files-found: error
+          retention-days: 3
 
-    - name: Install GLFW3, PKG Config, Git, Gtk3, LibPNG & SCONS
-      run: |
-        sudo apt-get install libglfw3-dev pkg-config git libgtk-3-dev \
-        libpng-dev libpng16-16 scons libfuse2
-
-    - name: Build Goxel
-      run: |
-        make release
-
-    - name: Install
-      run: |
-        sudo make install
-
-    - name: Build AppImage
-      run: |
-        make appimage
-
-    - name: Upload Binary
-      uses: actions/upload-artifact@v4
-      with:
-        name: linux_x86_64_binary
-        path: goxel
-        if-no-files-found: error
-
-    - name: Upload AppImage
-      uses: actions/upload-artifact@v4
-      with:
-        name: appimage
-        path: Goxel*.AppImage
-        if-no-files-found: error
-
-  osx_x86_64:
-    runs-on: macos-latest
+  release_contract:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m pip install PyYAML==6.0.3
+      - run: python3 -m unittest discover -s tests -p 'release_test.py'
 
-    - name: Install scons, glfw3 & tre
-      run: brew install scons glfw tre
-
-    - name: Build
-      run: |
-        make release
-
-    - name: Compress artifact
-      run: |
-        zip goxel.zip goxel
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: osx_binary
-        path: ./goxel.zip
-        if-no-files-found: error
-
-    - name: Build with xcode
-      run: |
-        cd osx/goxel
-        xcodebuild build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
-        cd build/Release
-        tar -cvf goxel.app.tar goxel.app
-
-    - name: Upload app Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: goxel-mac.app
-        path: ./osx/goxel/build/Release/goxel.app.tar
-        if-no-files-found: error
-
-  Success: # Not Neccessary
-    needs: [linux_x86_64, osx_x86_64, windows_x86_64]
-    runs-on: ubuntu-latest
+  draft_release:
+    if: ${{ github.event.repository.private == false && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/crystal-v') }}
+    needs: [windows_x64, macos_arm64, release_contract]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: crystal-goxel-*
+          merge-multiple: true
+          path: dist/assets
+      - name: Assemble checked release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/crystal-release.py assemble dist/assets --tag "$RELEASE_TAG" --output dist/release
+      - name: Create draft for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="$(python3 scripts/crystal-release.py version --tag "$RELEASE_TAG")"
+          options=(--verify-tag --draft --title "Crystal Goxel $version" --notes-file dist/release/release-notes.md)
+          if [[ "$version" == *-preview.* ]]; then options+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" dist/release/* "${options[@]}"

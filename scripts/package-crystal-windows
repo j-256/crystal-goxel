@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/package-crystal-windows [-h|--help]
 Build a portable x64 Crystal Goxel folder from an MSYS2 MINGW64 shell
 
-Requires .NET SDK 10 on PATH, Python 3, SCons, MinGW GCC, GLFW, TRE and zlib
+Requires .NET SDK 10 on PATH, Git, Python 3.11+, SCons, MinGW GCC, GLFW, TRE and zlib
 MSYS2 packages: mingw-w64-x86_64-gcc mingw-w64-x86_64-glfw
   mingw-w64-x86_64-libtre-git mingw-w64-x86_64-zlib scons
 The build restores pinned .NET dependencies from the network
@@ -28,7 +28,7 @@ if [ "${MSYSTEM:-}" != MINGW64 ] || [ -z "${MINGW_PREFIX:-}" ]; then
     printf '%s\n' 'Run this command in the MSYS2 MINGW64 shell' >&2
     exit 2
 fi
-for dependency in scons gcc g++ windres objdump dotnet cygpath python3; do
+for dependency in git scons gcc g++ windres objdump dotnet cygpath python3; do
     if ! command -v "$dependency" >/dev/null 2>&1; then
         printf 'Missing dependency: %s\n' "$dependency" >&2
         exit 3
@@ -50,6 +50,7 @@ if ! dotnet --list-sdks | awk '/^10\./ {found=1} END {exit !found}'; then
 fi
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_root"
+python3 scripts/crystal-release.py version >/dev/null
 scons -j8 mode=release yocto=0 >&2
 package='dist/Crystal Goxel Windows'
 rm -rf "$package"
@@ -66,7 +67,9 @@ cp licenses/GCC-COPYING3.txt licenses/GCC-COPYING.RUNTIME.txt \
     licenses/MINGW-LICENSE.txt "$package/licenses/"
 cp README.md CRYSTAL_BRIDGE.md COPYING AGENTS.md CONTRIBUTING.md "$package/"
 mkdir -p "$package/doc"
-cp doc/UPSTREAM_README.md doc/WINDOWS_TESTING.md "$package/doc/"
+cp doc/UPSTREAM_README.md doc/WINDOWS_TESTING.md doc/RELEASING.md \
+    doc/RELEASE_NOTES.md "$package/doc/"
 cp licenses/* "$package/licenses/"
+python3 scripts/crystal-release.py stamp "$package" --platform windows-x64 >&2
 python3 scripts/check-windows-package.py "$package" >&2
 printf '%s/%s\n' "$project_root" "$package"

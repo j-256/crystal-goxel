@@ -8,7 +8,10 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RuntimeIdentifiers>osx-arm64;osx-x64;linux-arm64;linux-x64;win-x64</RuntimeIdentifiers>
     <AssemblyName>crystal-bridge</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/../CRYSTAL_VERSION').Trim())</Version>
+    <!-- Public packages omit symbol files that record private build paths -->
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>
   <ItemGroup>

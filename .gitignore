@@ -20,3 +20,4 @@ xcuserdata/
 /bridge/obj/
 /dist/
 /build/
+__pycache__/

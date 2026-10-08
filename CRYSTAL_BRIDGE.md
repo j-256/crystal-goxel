@@ -10,7 +10,7 @@ For Windows, follow the [Windows build instructions](README.md#build-the-windows
 
 The Windows launcher uses Unicode Win32 APIs, explicit argument quoting and a restricted inherited-handle list so foreground and prefetch helpers can run concurrently. The executable's UTF-8 manifest keeps native dialog paths compatible with Goxel's narrow file APIs. Temporary helper workspaces use unique names in the user's temporary directory and are removed on success or failure. Packaged executables import only bundled or Windows system libraries; the package checker rejects missing DLL dependencies. The build is unsigned.
 
-On an Apple Silicon Mac, install Xcode command line tools, Python 3, .NET SDK 10, and `brew install cmake pkgconf`, then run:
+On an Apple Silicon Mac, install Xcode command line tools, Python 3.11 or later, .NET SDK 10, and `brew install cmake pkgconf`, then run:
 
 ```sh
 scripts/package-crystal-macos
