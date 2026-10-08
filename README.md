@@ -8,7 +8,7 @@ Construction exports as voxel NPC entities. Native terrain stays read-only: pain
 
 You need your own **Windows Crystal Project 1.6.9.0 installation** and Crystal Edit to review and compile exported source projects. The bridge checks the exact game resources; other versions and the native Mac game installation are not accepted. Game files are selected locally and are not bundled with this repository or the app.
 
-The Windows package targets x64 Windows 11 with an OpenGL-capable graphics driver. It includes its own helper runtime. The process launcher, packaged helper, synthetic checks and native world preparation have been exercised in a Windows 11 x64 VM. Windows graphical authoring and Crystal Edit UI behavior still need testing on a Windows desktop. The Windows CI job repeats the process and synthetic checks without game files. The Mac desktop has been exercised on Apple Silicon. See the [detailed guide](CRYSTAL_BRIDGE.md#build-and-open) for packaging and verification limits.
+The Windows package targets x64 Windows 11 with an OpenGL-capable graphics driver. It includes its own helper runtime. The process launcher, packaged helper, synthetic checks and native world preparation have been exercised in a Windows 11 ARM64 VM running the x64 package under emulation. Windows graphical authoring, native file dialogs and Crystal Edit UI behavior remain unverified. The Windows CI job is configured to repeat the process and synthetic checks without game files; those checks do not open the graphical editor. The Mac desktop has been exercised on Apple Silicon. See the [detailed guide](CRYSTAL_BRIDGE.md#build-and-open) for packaging limits.
 
 ### Build the Windows app
 
@@ -98,6 +98,8 @@ Keep the context directory with your `.gox`; the project does not embed native g
 - Large builds create many voxel NPCs and need in-game performance testing. Large editing operations are bounded; the [detailed guide](CRYSTAL_BRIDGE.md#scope-and-fidelity) explains fidelity and resource limits
 
 ## Development and upstream
+
+Windows contributors can help close the graphical testing gap. The test VM cannot create the required OpenGL context, and software-renderer attempts failed. See [Windows testing](doc/WINDOWS_TESTING.md) for the evidence collected, remaining checks, smoke commands and a report template. Contributors without the game can still check editor startup and native file dialogs.
 
 See [CRYSTAL_BRIDGE.md](CRYSTAL_BRIDGE.md) for helper commands, legacy bounded contexts, preservation rules and [verification](CRYSTAL_BRIDGE.md#verification). Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing the bridge or upstream editor code.
 

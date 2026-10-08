@@ -23,6 +23,7 @@ REQUIRED_FILES = (
     "Bridge/LICENSE.TXT", "Bridge/THIRD-PARTY-NOTICES.TXT",
     "licenses/Goxel-LICENSE.txt", "licenses/GLFW-LICENSE.txt",
     "licenses/TRE-LICENSE.txt", "README.md", "CRYSTAL_BRIDGE.md",
+    "doc/WINDOWS_TESTING.md",
     "licenses/GCC-COPYING3.txt", "licenses/GCC-COPYING.RUNTIME.txt",
     "licenses/MINGW-LICENSE.txt",
 )

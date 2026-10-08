@@ -2,7 +2,7 @@
 
 Crystal Goxel is an offline Goxel fork for building Crystal Edit voxel objects across a tiled view of the native Crystal Project world. The editor and viewport are C/C++17. A .NET 10 C# helper reads the user's game resources and invokes the original game's CPU mesh builders through reflection. No game assemblies, textures, world data or decompiled source are distributed with this repository.
 
-The prototype supports the fingerprinted Windows Crystal Project 1.6.9.0 installation and Crystal Edit source-project format 34. The desktop helper launcher supports Windows, macOS and Linux. The Windows x64 editor and self-contained helper have been cross-built and exercised in a Windows 11 x64 VM for process launching, synthetic checks and native world preparation. Native Windows process and synthetic helper checks are also configured in the Windows CI job. Windows graphical authoring and Crystal Edit UI behavior need testing on a Windows desktop. Native Mac authoring has been exercised on Apple Silicon. The native Mac game installation is not an accepted resource source.
+The prototype supports the fingerprinted Windows Crystal Project 1.6.9.0 installation and Crystal Edit source-project format 34. The desktop helper launcher supports Windows, macOS and Linux. The Windows x64 editor and self-contained helper have been cross-built and exercised in a Windows 11 ARM64 VM running the x64 package under emulation for process launching, synthetic checks and native world preparation. Windows process and synthetic helper checks are also configured in the Windows CI job. Windows graphical authoring and Crystal Edit UI behavior need testing on a Windows desktop. Native Mac authoring has been exercised on Apple Silicon. The native Mac game installation is not an accepted resource source.
 
 ## Build and open
 
@@ -81,6 +81,8 @@ The helper checks executable, voxel database and native world fingerprints befor
 
 ## Verification
 
+See [Windows testing](doc/WINDOWS_TESTING.md) for the dated platform evidence, unresolved graphics and UI checks, and contributor reporting instructions. A helper check or successful `--help` command does not establish graphical compatibility.
+
 The Windows CI job packages the desktop app and self-contained helper, checks native DLL imports and notices, and runs the synthetic bridge checks from a path containing spaces and Unicode. It also builds and executes `tests/crystal_host_test.cpp` against the same host implementation used by the editor. This exercises real child argument round trips, shell metacharacters, empty arguments, quotes, trailing backslashes, Unicode executable and file paths, simultaneous launches, bounded output draining, nonzero exits, missing executables, helper discovery and temporary workspace cleanup. These checks need no game files. They do not replace the graphical native smoke check or in-game testing.
 
 For a Windows native render smoke check, prepare a private context with your supported installation, then run from PowerShell using new output filenames:
@@ -91,7 +93,7 @@ For a Windows native render smoke check, prepare a private context with your sup
   --crystal-smoke 'C:\private\windows-smoke.png'
 ```
 
-Validation on 2026-10-08 covered a Windows 11 x64 VM: the host process contract, packaged helper checks, native world creation, tile preparation across boundaries, location lookup, and original-game construction checks passed. The VM display driver did not support OpenGL, and private Mesa software-renderer probes could not run the graphical smoke check. Startup failure handling was verified against that driver. Windows graphical editing, native file dialogs and Crystal Edit UI behavior remain unverified. Mac native rendering, authoring, save/reopen, combined exports and original-game construction checks passed with the same helper implementation.
+Validation on 2026-10-08 covered a Windows 11 ARM64 VM running the x64 package under emulation: the host process contract, packaged helper checks, native world creation, tile preparation across boundaries, location lookup, and original-game construction checks passed. The VM display driver did not support OpenGL, and private Mesa software-renderer probes could not run the graphical smoke check. Startup failure handling was verified against that driver. This does not establish native x64 desktop compatibility or general Windows ARM64 support. Windows graphical editing, native file dialogs and Crystal Edit UI behavior remain unverified. Mac native rendering, authoring, save/reopen, combined exports and original-game construction checks passed with the same helper implementation.
 
 Windows CI does not have the user's game resources and cannot run the native-world graphical check. The CI job provides build, process and synthetic checks; a successful Windows desktop authoring run remains separate evidence.
 
