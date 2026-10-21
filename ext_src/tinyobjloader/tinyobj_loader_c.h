@@ -810,6 +810,7 @@ static int get_line_infos(const char *buf, size_t buf_len, LineInfo **line_infos
     * ending character so add an extra line if there
     * are more characters after the last line ending
     * that was found. */
+  /* Preserve the order test without subtracting unsigned offsets */
   if (end_idx > last_line_ending) {
       (*num_lines)++;
   }
