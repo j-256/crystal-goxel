@@ -171,9 +171,9 @@ static void render_hint(const hint_t *hint, float pos)
 {
     gui_set_current_pos_x(pos);
     if (hint->title[0]) {
-        gui_text(hint->title);
+        gui_text("%s", hint->title);
     }
-    gui_text(hint->msg);
+    gui_text("%s", hint->msg);
 }
 
 static void render_hints(const hint_t *hints)
