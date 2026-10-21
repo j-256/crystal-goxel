@@ -312,16 +312,24 @@ static void set_clipboard_text(void *user, const char *text)
     glfwSetClipboardString(window, text);
 }
 
-static void filters_to_nfd_spec(
+static bool filters_to_nfd_spec(
         const char *const *filters, char buf[], size_t buf_size)
 {
     int i;
+    int written;
     size_t len = 0;
 
+    if (buf_size == 0) return false;
     buf[0] = '\0';
     for (i = 0; filters[i]; i++) {
-        len += snprintf(buf + len, buf_size - len, "%s", filters[i] + 2);
+        written = snprintf(buf + len, buf_size - len, "%s", filters[i] + 2);
+        if (written < 0 || (size_t)written >= buf_size - len) {
+            buf[0] = '\0';
+            return false;
+        }
+        len += (size_t)written;
     }
+    return true;
 }
 
 static bool open_dialog(
@@ -348,7 +356,8 @@ static bool open_dialog(
           flags & 1 ? "Save" : "Open",
           default_path_and_file ? default_path_and_file : "");
 
-    filters_to_nfd_spec(filters, nfd_filters_spec, sizeof(nfd_filters_spec));
+    if (!filters_to_nfd_spec(filters, nfd_filters_spec,
+                             sizeof(nfd_filters_spec))) return false;
     filter.name = filters_desc;
     filter.spec = nfd_filters_spec;
 

@@ -775,6 +775,7 @@ ACTION_REGISTER(ACTION_open,
 static void a_save_as(void)
 {
     char default_save_path[1024];
+    char *new_path;
     const char *path;
     const char *filters[] = {"*.gox", NULL};
 
@@ -782,9 +783,12 @@ static void a_save_as(void)
     path = sys_get_save_path(default_save_path, filters, "gox");
     if (!path) return;
     if (path != goxel.image->path) {
+        new_path = strdup(path);
+        if (!new_path) return;
         free(goxel.image->path);
-        goxel.image->path = strdup(path);
+        goxel.image->path = new_path;
     }
+    path = goxel.image->path;
     save_to_file(goxel.image, goxel.image->path);
     goxel.image->saved_key = image_get_key(goxel.image);
     sys_on_saved(path);
@@ -798,6 +802,7 @@ ACTION_REGISTER(ACTION_save_as,
 static void a_save(void)
 {
     char default_save_path[1024];
+    char *new_path;
     const char *path = goxel.image->path;
     const char *filters[] = {"*.gox", NULL};
 
@@ -807,9 +812,12 @@ static void a_save(void)
     }
     if (!path) return;
     if (path != goxel.image->path) {
+        new_path = strdup(path);
+        if (!new_path) return;
         free(goxel.image->path);
-        goxel.image->path = strdup(path);
+        goxel.image->path = new_path;
     }
+    path = goxel.image->path;
     save_to_file(goxel.image, goxel.image->path);
     goxel.image->saved_key = image_get_key(goxel.image);
     sys_on_saved(path);
