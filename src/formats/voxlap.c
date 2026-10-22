@@ -48,11 +48,11 @@ typedef struct {
 
 
 #define READ(type, file) \
-    ({ type v; if (fread(&v, sizeof(v), 1, file) != 1) \
-        raise("Read file error"); v;})
+    ({ type v; if (fread(&v, sizeof(v), 1, file) != 1) { \
+        raise("Read file error"); } v;})
 #define WRITE(type, v, file) \
-    do { type v_ = v; if (fwrite(&v_, sizeof(v_), 1, file) != 1) \
-        raise("Write file error"); } while (0)
+    do { type v_ = v; if (fwrite(&v_, sizeof(v_), 1, file) != 1) { \
+        raise("Write file error"); } } while (0)
 
 #define raise(msg) do { \
         LOG_E(msg); \
