@@ -135,7 +135,7 @@ static int kv6_import(const file_format_t *format, image_t *image,
         READ(uint8_t, file); // lighting
     }
     xoffsets = calloc(w, sizeof(*xoffsets));
-    xyoffsets = calloc(w * h, sizeof(*xyoffsets));
+    xyoffsets = calloc((size_t)w * h, sizeof(*xyoffsets));
     if (!xoffsets || !xyoffsets) raise("Cannot allocate KV6 offsets");
     for (i = 0; i < w; i++)      xoffsets[i] = READ(uint32_t, file);
     for (i = 0; i < w * h; i++) xyoffsets[i] = READ(uint16_t, file);
