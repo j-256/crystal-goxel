@@ -29,6 +29,8 @@
 #include "yocto_trace.h"
 
 #include <algorithm>
+#include <climits>
+#include <cmath>
 #include <cstring>
 #include <future>
 #include <memory>
@@ -1496,25 +1498,32 @@ trace_state make_trace_state(
     const scene_data& scene, const trace_params& params) {
   auto& camera = scene.cameras[params.camera];
   auto  state  = trace_state{};
-  if (camera.aspect >= 1) {
-    state.width  = params.resolution;
-    state.height = (int)round(params.resolution / camera.aspect);
-  } else {
-    state.height = params.resolution;
-    state.width  = (int)round(params.resolution * camera.aspect);
-  }
+  if (params.resolution <= 0 || !std::isfinite(camera.aspect) ||
+      camera.aspect <= 0)
+    throw std::length_error("invalid trace dimensions");
+  auto width = camera.aspect >= 1 ? (double)params.resolution
+                                  : round((double)params.resolution * camera.aspect);
+  auto height = camera.aspect >= 1 ? round((double)params.resolution / camera.aspect)
+                                   : (double)params.resolution;
+  if (!(width >= 1 && width <= INT_MAX && height >= 1 && height <= INT_MAX))
+    throw std::length_error("invalid trace dimensions");
+  state.width = (int)width;
+  state.height = (int)height;
+  if (state.width > INT_MAX / state.height)
+    throw std::length_error("trace image exceeds index range");
+  auto pixel_count = (size_t)state.width * state.height;
   state.samples = 0;
-  state.image.assign(state.width * state.height, {0, 0, 0, 0});
-  state.albedo.assign(state.width * state.height, {0, 0, 0});
-  state.normal.assign(state.width * state.height, {0, 0, 0});
-  state.hits.assign(state.width * state.height, 0);
-  state.rngs.assign(state.width * state.height, {});
+  state.image.assign(pixel_count, {0, 0, 0, 0});
+  state.albedo.assign(pixel_count, {0, 0, 0});
+  state.normal.assign(pixel_count, {0, 0, 0});
+  state.hits.assign(pixel_count, 0);
+  state.rngs.assign(pixel_count, {});
   auto rng_ = make_rng(1301081);
   for (auto& rng : state.rngs) {
     rng = make_rng(params.seed, rand1i(rng_, 1 << 31) / 2 + 1);
   }
   if (params.denoise) {
-    state.denoised.assign(state.width * state.height, {0, 0, 0, 0});
+    state.denoised.assign(pixel_count, {0, 0, 0, 0});
   }
   return state;
 }
@@ -1565,7 +1574,10 @@ trace_lights make_trace_lights(
     light.environment = (int)handle;
     if (environment.emission_tex != invalidid) {
       auto& texture      = scene.textures[environment.emission_tex];
-      light.elements_cdf = vector<float>(texture.width * texture.height);
+      if (texture.width <= 0 || texture.height <= 0 ||
+          texture.width > INT_MAX / texture.height)
+        throw std::length_error("invalid environment texture dimensions");
+      light.elements_cdf = vector<float>((size_t)texture.width * texture.height);
       for (auto idx : range(light.elements_cdf.size())) {
         auto ij    = vec2i{(int)idx % texture.width, (int)idx / texture.width};
         auto th    = (ij.y + 0.5f) * pif / texture.height;

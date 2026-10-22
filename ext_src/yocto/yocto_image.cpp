@@ -36,6 +36,7 @@
 #include "../stb/stb_image_resize.h"
 
 #include <future>
+#include <climits>
 #include <memory>
 #include <stdexcept>
 
@@ -92,10 +93,17 @@ inline void parallel_for_batch(T num, T batch, Func&& func) {
 // -----------------------------------------------------------------------------
 namespace yocto {
 
+static size_t checked_image_size(int width, int height) {
+  if (width <= 0 || height <= 0 || (size_t)width > (size_t)INT_MAX / height)
+    throw std::length_error("invalid image dimensions");
+  return (size_t)width * height;
+}
+
 // image creation
 image_data make_image(int width, int height, bool linear) {
   return image_data{
-      width, height, linear, vector<vec4f>(width * height, vec4f{0, 0, 0, 0})};
+      width, height, linear,
+      vector<vec4f>(checked_image_size(width, height), vec4f{0, 0, 0, 0})};
 }
 
 // equality
@@ -818,14 +826,14 @@ namespace yocto {
 // Lookup an image at coordinates `ij`
 static vec4f lookup_image(const vector<vec4f>& img, int width, int height,
     int i, int j, bool as_linear) {
-  return img[j * width * i];
+  return img[(size_t)j * width + i];
 }
 static vec4f lookup_image(const vector<vec4b>& img, int width, int height,
     int i, int j, bool as_linear) {
   if (as_linear) {
-    return srgb_to_rgb(byte_to_float(img[j * width * i]));
+    return srgb_to_rgb(byte_to_float(img[(size_t)j * width + i]));
   } else {
-    return byte_to_float(img[j * width * i]);
+    return byte_to_float(img[(size_t)j * width + i]);
   }
 }
 
@@ -834,7 +842,8 @@ template <typename T>
 static vec4f eval_image_generic(const vector<T>& img, int width, int height,
     const vec2f& uv, bool as_linear, bool no_interpolation,
     bool clamp_to_edge) {
-  if (img.empty()) return vec4f{0, 0, 0, 0};
+  if (width <= 0 || height <= 0 ||
+      (size_t)width * height > img.size()) return vec4f{0, 0, 0, 0};
 
   // get image width/height
   auto size = vec2i{width, height};
@@ -1246,6 +1255,7 @@ void add_border(vector<vec4f>& pixels, const vector<vec4f>& source, int width,
 void make_sunsky(vector<vec4f>& pixels, int width, int height, float theta_sun,
     float turbidity, bool has_sun, float sun_intensity, float sun_radius,
     const vec3f& ground_albedo) {
+  checked_image_size(width, height);
   auto zenith_xyY = vec3f{
       (+0.00165f * pow(theta_sun, 3.f) - 0.00374f * pow(theta_sun, 2.f) +
           0.00208f * theta_sun + 0.00000f) *
@@ -1334,7 +1344,7 @@ void make_sunsky(vector<vec4f>& pixels, int width, int height, float theta_sun,
   };
 
   // Make the sun sky image
-  pixels.resize(width * height);
+  pixels.resize(checked_image_size(width, height));
   for (auto j = 0; j < height / 2; j++) {
     auto theta = pif * ((j + 0.5f) / height);
     theta      = clamp(theta, 0.0f, pif / 2 - flt_eps);
@@ -1377,7 +1387,7 @@ void make_sunsky(vector<vec4f>& pixels, int width, int height, float theta_sun,
 // Make an image of multiple lights.
 void make_lights(vector<vec4f>& pixels, int width, int height, const vec3f& le,
     int nlights, float langle, float lwidth, float lheight) {
-  pixels.resize(width * height);
+  pixels.resize(checked_image_size(width, height));
   for (auto j = 0; j < height / 2; j++) {
     auto theta = pif * ((j + 0.5f) / height);
     theta      = clamp(theta, 0.0f, pif / 2 - 0.00001f);
