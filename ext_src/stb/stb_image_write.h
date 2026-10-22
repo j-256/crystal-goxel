@@ -1152,7 +1152,7 @@ STBIWDEF unsigned char *stbi_write_png_to_mem(const unsigned char *pixels, int s
        x > (INT_MAX / n) - 1)
       return NULL;
    row_bytes = x * n;
-   if ((size_t)(row_bytes + 1) * y > STBIW_MAX_SAFE_INPUT ||
+   if (row_bytes + 1 > STBIW_MAX_SAFE_INPUT / y ||
        stride_bytes < 0 || (stride_bytes && stride_bytes < row_bytes))
       return NULL;
 
