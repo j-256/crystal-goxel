@@ -19,6 +19,7 @@
 #include "goxel.h"
 
 #include "utils/b64.h"
+#include <limits.h>
 
 #define TEST(cond) \
     do { \
@@ -129,9 +130,32 @@ static void test_load_corrupt(void)
     sys_delete_file("/tmp/goxel_test.gox");
 }
 
+static void test_old_vox_dimensions(void)
+{
+    const char *path = "/tmp/goxel_test.vox";
+    const uint32_t dimensions[][3] = {
+        {2, 2, UINT32_MAX},
+        {2, 2, INT_MAX},
+        {2, 2, 0},
+    };
+    FILE *file;
+    int i;
+
+    if (DEFINED(WIN32)) return;
+    for (i = 0; i < ARRAY_SIZE(dimensions); i++) {
+        file = fopen(path, "wb");
+        TEST(file != NULL);
+        TEST(fwrite(dimensions[i], sizeof(dimensions[i]), 1, file) == 1);
+        TEST(fclose(file) == 0);
+        TEST(goxel_import_file(path, NULL) != 0);
+    }
+    sys_delete_file(path);
+}
+
 void tests_run(void)
 {
     test_load_file_v2();
     test_load_file_v1_with_preview();
     test_load_corrupt();
+    test_old_vox_dimensions();
 }
