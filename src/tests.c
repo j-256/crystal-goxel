@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "file_format.h"
 
 #include "utils/b64.h"
 #include <limits.h>
@@ -152,10 +153,29 @@ static void test_old_vox_dimensions(void)
     sys_delete_file(path);
 }
 
+static void test_png_export_dimensions(void)
+{
+    const file_format_t *format = file_format_get(NULL, "png", "w");
+    int width = goxel.image->export_width;
+    int height = goxel.image->export_height;
+
+    TEST(format != NULL);
+    goxel.image->export_width = INT_MAX;
+    goxel.image->export_height = 2;
+    TEST(format->export_func(format, goxel.image,
+                             "/tmp/goxel_test_invalid.png") != 0);
+    goxel.image->export_width = 0;
+    TEST(format->export_func(format, goxel.image,
+                             "/tmp/goxel_test_invalid.png") != 0);
+    goxel.image->export_width = width;
+    goxel.image->export_height = height;
+}
+
 void tests_run(void)
 {
     test_load_file_v2();
     test_load_file_v1_with_preview();
     test_load_corrupt();
     test_old_vox_dimensions();
+    test_png_export_dimensions();
 }

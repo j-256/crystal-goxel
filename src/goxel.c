@@ -27,6 +27,7 @@
 #include "../ext_src/stb/stb_ds.h"
 
 #include <errno.h> // IWYU pragma: keep.
+#include <limits.h>
 #include <stdarg.h>
 
 // The global goxel instance.
@@ -1317,16 +1318,26 @@ const layer_t *goxel_get_render_layers(bool with_tool_preview)
     return goxel.render_layers;
 }
 
-// Render the view into an RGB[A] buffer.
-void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
+// Render the view into an RGB[A] buffer, returning false on invalid dimensions or allocation failure
+bool goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
 {
-    camera_t *camera = get_camera();
+    camera_t *camera;
     const volume_t *volume;
     texture_t *fbo;
-    renderer_t rend = goxel.rend;
-    float rect[4] = {0, 0, w * 2, h * 2};
+    renderer_t rend;
+    float rect[4];
     uint8_t *tmp_buf;
 
+    if (!buf || w <= 0 || h <= 0 || w > INT_MAX / 2 || h > INT_MAX / 2 ||
+        (bpp != 3 && bpp != 4) ||
+        (size_t)w > INT_MAX / (4 * bpp) / (size_t)h) return false;
+    tmp_buf = calloc((size_t)w * h * 4, bpp);
+    if (!tmp_buf) return false;
+    camera = get_camera();
+    rend = goxel.rend;
+    rect[0] = rect[1] = 0;
+    rect[2] = w * 2;
+    rect[3] = h * 2;
     camera->aspect = (float)w / h;
     camera_update(camera);
 
@@ -1343,11 +1354,11 @@ void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
     if (crystal_active()) crystal_render(&rend, false);
     else render_volume(&rend, volume, NULL, 0);
     render_submit(&rend, rect, (bpp == 3) ? goxel.back_color : NULL);
-    tmp_buf = calloc(w * h * 4, bpp);
     texture_get_data(fbo, w * 2, h * 2, bpp, tmp_buf);
     img_downsample(tmp_buf, w * 2, h * 2, bpp, buf);
     free(tmp_buf);
     texture_delete(fbo);
+    return true;
 }
 
 void goxel_add_hint(int flags, const char *title, const char *msg)
