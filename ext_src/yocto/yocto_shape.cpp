@@ -33,6 +33,7 @@
 #include "yocto_shape.h"
 
 #include <algorithm>
+#include <climits>
 #include <deque>
 #include <memory>
 #include <stdexcept>
@@ -542,14 +543,25 @@ vector<string> fvshape_stats(const fvshape_data& shape, bool verbose) {
 // -----------------------------------------------------------------------------
 namespace yocto {
 
+static size_t checked_shape_grid_size(const vec2i& steps, bool add_row) {
+  if (steps.x <= 0 || steps.y <= 0 || steps.x == INT_MAX)
+    throw std::length_error("invalid shape grid dimensions");
+  auto columns = (size_t)steps.x + 1;
+  auto rows    = (size_t)steps.y + (add_row ? 1 : 0);
+  if (columns > (size_t)INT_MAX / rows)
+    throw std::length_error("shape grid exceeds index range");
+  return columns * rows;
+}
+
 // Make a tesselated rectangle. Useful in other subdivisions.
 static shape_data make_quads(
     const vec2i& steps, const vec2f& scale, const vec2f& uvscale) {
   auto shape = shape_data{};
 
-  shape.positions.resize((steps.x + 1) * (steps.y + 1));
-  shape.normals.resize((steps.x + 1) * (steps.y + 1));
-  shape.texcoords.resize((steps.x + 1) * (steps.y + 1));
+  auto vertex_count = checked_shape_grid_size(steps, true);
+  shape.positions.resize(vertex_count);
+  shape.normals.resize(vertex_count);
+  shape.texcoords.resize(vertex_count);
   for (auto j : range(steps.y + 1)) {
     for (auto i : range(steps.x + 1)) {
       auto uv = vec2f{i / (float)steps.x, j / (float)steps.y};
@@ -560,7 +572,7 @@ static shape_data make_quads(
     }
   }
 
-  shape.quads.resize(steps.x * steps.y);
+  shape.quads.resize((size_t)steps.x * steps.y);
   for (auto j : range(steps.y)) {
     for (auto i : range(steps.x)) {
       shape.quads[j * steps.x + i] = {j * (steps.x + 1) + i,
@@ -962,10 +974,11 @@ shape_data make_rounded_uvcylinder(const vec3i& steps, const vec2f& scale,
 shape_data make_lines(const vec2i& steps, const vec2f& scale,
     const vec2f& uvscale, const vec2f& rad) {
   auto shape = shape_data{};
-  shape.positions.resize((steps.x + 1) * steps.y);
-  shape.normals.resize((steps.x + 1) * steps.y);
-  shape.texcoords.resize((steps.x + 1) * steps.y);
-  shape.radius.resize((steps.x + 1) * steps.y);
+  auto vertex_count = checked_shape_grid_size(steps, false);
+  shape.positions.resize(vertex_count);
+  shape.normals.resize(vertex_count);
+  shape.texcoords.resize(vertex_count);
+  shape.radius.resize(vertex_count);
   if (steps.y > 1) {
     for (auto j : range(steps.y)) {
       for (auto i : range(steps.x + 1)) {
@@ -987,7 +1000,7 @@ shape_data make_lines(const vec2i& steps, const vec2f& scale,
     }
   }
 
-  shape.lines.resize(steps.x * steps.y);
+  shape.lines.resize((size_t)steps.x * steps.y);
   for (int j = 0; j < steps.y; j++) {
     for (int i = 0; i < steps.x; i++) {
       shape.lines[j * steps.x + i] = {
@@ -3268,9 +3281,10 @@ namespace yocto {
 void make_rect(vector<vec4i>& quads, vector<vec3f>& positions,
     vector<vec3f>& normals, vector<vec2f>& texcoords, const vec2i& steps,
     const vec2f& scale, const vec2f& uvscale) {
-  positions.resize((steps.x + 1) * (steps.y + 1));
-  normals.resize((steps.x + 1) * (steps.y + 1));
-  texcoords.resize((steps.x + 1) * (steps.y + 1));
+  auto vertex_count = checked_shape_grid_size(steps, true);
+  positions.resize(vertex_count);
+  normals.resize(vertex_count);
+  texcoords.resize(vertex_count);
   for (auto j : range(steps.y + 1)) {
     for (auto i : range(steps.x + 1)) {
       auto uv = vec2f{i / (float)steps.x, j / (float)steps.y};
@@ -3281,7 +3295,7 @@ void make_rect(vector<vec4i>& quads, vector<vec3f>& positions,
     }
   }
 
-  quads.resize(steps.x * steps.y);
+  quads.resize((size_t)steps.x * steps.y);
   for (auto j : range(steps.y)) {
     for (auto i : range(steps.x)) {
       quads[j * steps.x + i] = {j * (steps.x + 1) + i,
@@ -3672,10 +3686,11 @@ void make_lines(vector<vec2i>& lines, vector<vec3f>& positions,
     vector<vec3f>& normals, vector<vec2f>& texcoords, vector<float>& radius,
     const vec2i& steps, const vec2f& size, const vec2f& uvscale,
     const vec2f& rad) {
-  positions.resize((steps.x + 1) * steps.y);
-  normals.resize((steps.x + 1) * steps.y);
-  texcoords.resize((steps.x + 1) * steps.y);
-  radius.resize((steps.x + 1) * steps.y);
+  auto vertex_count = checked_shape_grid_size(steps, false);
+  positions.resize(vertex_count);
+  normals.resize(vertex_count);
+  texcoords.resize(vertex_count);
+  radius.resize(vertex_count);
   if (steps.y > 1) {
     for (auto j : range(steps.y)) {
       for (auto i : range(steps.x + 1)) {
@@ -3697,7 +3712,7 @@ void make_lines(vector<vec2i>& lines, vector<vec3f>& positions,
     }
   }
 
-  lines.resize(steps.x * steps.y);
+  lines.resize((size_t)steps.x * steps.y);
   for (int j = 0; j < steps.y; j++) {
     for (int i = 0; i < steps.x; i++) {
       lines[j * steps.x + i] = {

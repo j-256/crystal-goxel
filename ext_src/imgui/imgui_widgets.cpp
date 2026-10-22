@@ -2961,8 +2961,11 @@ TYPE ImGui::ScaleValueFromRatioT(ImGuiDataType data_type, float t, TYPE v_min, T
             //   This code is carefully tuned to work with large values (e.g. high ranges of U64) while preserving this property..
             // - Not doing a *1.0 multiply at the end of a range as it tends to be lossy. While absolute aiming at a large s64/u64
             //   range is going to be imprecise anyway, with this check we at least make the edge values matches expected limits.
-            FLOATTYPE v_new_off_f = (SIGNEDTYPE)(v_max - v_min) * t;
-            result = (TYPE)((SIGNEDTYPE)v_min + (SIGNEDTYPE)(v_new_off_f + (FLOATTYPE)(v_min > v_max ? -0.5 : 0.5)));
+            long double v_new = (long double)v_min + ((long double)v_max - (long double)v_min) * t;
+            v_new += v_min > v_max ? -0.5L : 0.5L;
+            const TYPE lower = v_min < v_max ? v_min : v_max;
+            const TYPE upper = v_min > v_max ? v_min : v_max;
+            result = v_new <= (long double)lower ? lower : v_new >= (long double)upper ? upper : (TYPE)v_new;
         }
     }
 

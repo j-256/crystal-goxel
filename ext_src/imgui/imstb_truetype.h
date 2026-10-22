@@ -428,6 +428,7 @@ int main(int arg, char **argv)
 ////   link with the C runtime library.
 
 #ifdef STB_TRUETYPE_IMPLEMENTATION
+#include <limits.h>
    // #define your own (u)stbtt_int8/16/32 before including to override this
    #ifndef stbtt_uint8
    typedef unsigned char   stbtt_uint8;
@@ -3737,8 +3738,16 @@ STBTT_DEF unsigned char *stbtt_GetGlyphBitmapSubpixel(const stbtt_fontinfo *info
    stbtt_GetGlyphBitmapBoxSubpixel(info, glyph, scale_x, scale_y, shift_x, shift_y, &ix0,&iy0,&ix1,&iy1);
 
    // now we get the size
-   gbm.w = (ix1 - ix0);
-   gbm.h = (iy1 - iy0);
+   if (ix1 <= ix0 || iy1 <= iy0 ||
+       (long long)ix1 - ix0 > INT_MAX || (long long)iy1 - iy0 > INT_MAX ||
+       (long long)ix1 - ix0 > INT_MAX / ((long long)iy1 - iy0)) {
+      STBTT_free(vertices, info->userdata);
+      if (width) *width = 0;
+      if (height) *height = 0;
+      return NULL;
+   }
+   gbm.w = ix1 - ix0;
+   gbm.h = iy1 - iy0;
    gbm.pixels = NULL; // in case we error
 
    if (width ) *width  = gbm.w;
@@ -3747,7 +3756,7 @@ STBTT_DEF unsigned char *stbtt_GetGlyphBitmapSubpixel(const stbtt_fontinfo *info
    if (yoff  ) *yoff   = iy0;
 
    if (gbm.w && gbm.h) {
-      gbm.pixels = (unsigned char *) STBTT_malloc(gbm.w * gbm.h, info->userdata);
+      gbm.pixels = (unsigned char *) STBTT_malloc((size_t)gbm.w * gbm.h, info->userdata);
       if (gbm.pixels) {
          gbm.stride = gbm.w;
 
@@ -3827,10 +3836,12 @@ static int stbtt_BakeFontBitmap_internal(unsigned char *data, int offset,  // fo
    float scale;
    int x,y,bottom_y, i;
    stbtt_fontinfo f;
+   if (pw <= 0 || ph <= 0 || pw > INT_MAX / ph)
+      return -1;
    f.userdata = NULL;
    if (!stbtt_InitFont(&f, data, offset))
       return -1;
-   STBTT_memset(pixels, 0, pw*ph); // background of 0 around pixels
+   STBTT_memset(pixels, 0, (size_t)pw * ph); // background of 0 around pixels
    x=y=1;
    bottom_y = 1;
 
@@ -3964,6 +3975,10 @@ static void stbrp_pack_rects(stbrp_context *con, stbrp_rect *rects, int num_rect
 
 STBTT_DEF int stbtt_PackBegin(stbtt_pack_context *spc, unsigned char *pixels, int pw, int ph, int stride_in_bytes, int padding, void *alloc_context)
 {
+   if (!spc || pw <= 0 || ph <= 0 || padding < 0 || padding >= pw ||
+       pw > INT_MAX / ph || stride_in_bytes < 0 ||
+       (size_t)(pw - padding) > (size_t)INT_MAX / sizeof(stbrp_node))
+      return 0;
    stbrp_context *context = (stbrp_context *) STBTT_malloc(sizeof(*context)            ,alloc_context);
    int            num_nodes = pw - padding;
    stbrp_node    *nodes   = (stbrp_node    *) STBTT_malloc(sizeof(*nodes  ) * num_nodes,alloc_context);
@@ -3989,7 +4004,7 @@ STBTT_DEF int stbtt_PackBegin(stbtt_pack_context *spc, unsigned char *pixels, in
    stbrp_init_target(context, pw-padding, ph-padding, nodes, num_nodes);
 
    if (pixels)
-      STBTT_memset(pixels, 0, pw*ph); // background of 0 around pixels
+      STBTT_memset(pixels, 0, (size_t)pw * ph); // background of 0 around pixels
 
    return 1;
 }
@@ -4585,9 +4600,10 @@ STBTT_DEF unsigned char * stbtt_GetGlyphSDF(const stbtt_fontinfo *info, float sc
    float scale_x = scale, scale_y = scale;
    int ix0,iy0,ix1,iy1;
    int w,h;
+   long long left, top, right, bottom;
    unsigned char *data;
 
-   if (scale == 0) return NULL;
+   if (scale == 0 || padding < 0) return NULL;
 
    stbtt_GetGlyphBitmapBoxSubpixel(info, glyph, scale, scale, 0.0f,0.0f, &ix0,&iy0,&ix1,&iy1);
 
@@ -4595,13 +4611,20 @@ STBTT_DEF unsigned char * stbtt_GetGlyphSDF(const stbtt_fontinfo *info, float sc
    if (ix0 == ix1 || iy0 == iy1)
       return NULL;
 
-   ix0 -= padding;
-   iy0 -= padding;
-   ix1 += padding;
-   iy1 += padding;
-
-   w = (ix1 - ix0);
-   h = (iy1 - iy0);
+   left = (long long)ix0 - padding;
+   top = (long long)iy0 - padding;
+   right = (long long)ix1 + padding;
+   bottom = (long long)iy1 + padding;
+   if (left < INT_MIN || top < INT_MIN || right > INT_MAX || bottom > INT_MAX ||
+       right <= left || bottom <= top || right - left > INT_MAX ||
+       bottom - top > INT_MAX || right - left > INT_MAX / (bottom - top))
+      return NULL;
+   ix0 = (int)left;
+   iy0 = (int)top;
+   ix1 = (int)right;
+   iy1 = (int)bottom;
+   w = (int)(right - left);
+   h = (int)(bottom - top);
 
    if (width ) *width  = w;
    if (height) *height = h;
@@ -4616,8 +4639,18 @@ STBTT_DEF unsigned char * stbtt_GetGlyphSDF(const stbtt_fontinfo *info, float sc
       float *precompute;
       stbtt_vertex *verts;
       int num_verts = stbtt_GetGlyphShape(info, glyph, &verts);
-      data = (unsigned char *) STBTT_malloc(w * h, info->userdata);
+      if (num_verts <= 0 || (size_t)num_verts > (size_t)INT_MAX / sizeof(float)) {
+         STBTT_free(verts, info->userdata);
+         return NULL;
+      }
+      data = (unsigned char *) STBTT_malloc((size_t)w * h, info->userdata);
       precompute = (float *) STBTT_malloc(num_verts * sizeof(float), info->userdata);
+      if (!data || !precompute) {
+         STBTT_free(data, info->userdata);
+         STBTT_free(precompute, info->userdata);
+         STBTT_free(verts, info->userdata);
+         return NULL;
+      }
 
       for (i=0,j=num_verts-1; i < num_verts; j=i++) {
          if (verts[i].type == STBTT_vline) {

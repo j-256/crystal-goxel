@@ -39,6 +39,7 @@ Index of this file:
 #endif
 
 #include <stdio.h>      // vsnprintf, sscanf, printf
+#include <climits>
 
 // Visual Studio warnings
 #ifdef _MSC_VER
@@ -2960,8 +2961,11 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
     // 5. Start packing
     // Pack our extra data rectangles first, so it will be on the upper-left corner of our texture (UV will have small values).
     const int TEX_HEIGHT_MAX = 1024 * 32;
+    if (atlas->TexWidth <= 0 || atlas->TexWidth > INT_MAX / TEX_HEIGHT_MAX)
+        return false;
     stbtt_pack_context spc = {};
-    stbtt_PackBegin(&spc, NULL, atlas->TexWidth, TEX_HEIGHT_MAX, 0, atlas->TexGlyphPadding, NULL);
+    if (!stbtt_PackBegin(&spc, NULL, atlas->TexWidth, TEX_HEIGHT_MAX, 0, atlas->TexGlyphPadding, NULL))
+        return false;
     ImFontAtlasBuildPackCustomRects(atlas, spc.pack_info);
 
     // 6. Pack each source font. No rendering yet, we are working with rectangles in an infinitely tall texture at this point.
@@ -2982,9 +2986,20 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
 
     // 7. Allocate texture
     atlas->TexHeight = (atlas->Flags & ImFontAtlasFlags_NoPowerOfTwoHeight) ? (atlas->TexHeight + 1) : ImUpperPowerOfTwo(atlas->TexHeight);
+    if (atlas->TexHeight <= 0 || atlas->TexHeight > INT_MAX / atlas->TexWidth)
+    {
+        stbtt_PackEnd(&spc);
+        return false;
+    }
     atlas->TexUvScale = ImVec2(1.0f / atlas->TexWidth, 1.0f / atlas->TexHeight);
-    atlas->TexPixelsAlpha8 = (unsigned char*)IM_ALLOC(atlas->TexWidth * atlas->TexHeight);
-    memset(atlas->TexPixelsAlpha8, 0, atlas->TexWidth * atlas->TexHeight);
+    const size_t tex_size = (size_t)atlas->TexWidth * atlas->TexHeight;
+    atlas->TexPixelsAlpha8 = (unsigned char*)IM_ALLOC(tex_size);
+    if (!atlas->TexPixelsAlpha8)
+    {
+        stbtt_PackEnd(&spc);
+        return false;
+    }
+    memset(atlas->TexPixelsAlpha8, 0, tex_size);
     spc.pixels = atlas->TexPixelsAlpha8;
     spc.height = atlas->TexHeight;
 

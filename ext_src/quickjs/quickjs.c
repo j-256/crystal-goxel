@@ -28,6 +28,8 @@
 #include <inttypes.h>
 #include <string.h>
 #include <assert.h>
+#include <limits.h>
+#include <stdint.h>
 #include <sys/time.h>
 #include <time.h>
 #include <fenv.h>
@@ -1403,14 +1405,26 @@ static no_inline int js_realloc_array(JSContext *ctx, void **parray,
                                       int elem_size, int *psize, int req_size)
 {
     int new_size;
+    size_t growth;
     size_t slack;
     void *new_array;
-    /* XXX: potential arithmetic overflow */
-    new_size = max_int(req_size, *psize * 3 / 2);
-    new_array = js_realloc2(ctx, *parray, new_size * elem_size, &slack);
+    if (req_size < 0 || elem_size <= 0 || *psize < 0) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+    growth = (size_t)*psize + (size_t)*psize / 2;
+    new_size = growth <= INT_MAX ? max_int(req_size, (int)growth) : req_size;
+    if ((size_t)new_size > SIZE_MAX / (size_t)elem_size) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+    new_array = js_realloc2(ctx, *parray, (size_t)new_size * elem_size, &slack);
     if (!new_array)
         return -1;
-    new_size += slack / elem_size;
+    if (slack / (size_t)elem_size > (size_t)(INT_MAX - new_size))
+        new_size = INT_MAX;
+    else
+        new_size += slack / (size_t)elem_size;
     *psize = new_size;
     *parray = new_array;
     return 0;
