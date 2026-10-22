@@ -212,9 +212,13 @@ STBIWDEF void stbi_flip_vertically_on_write(int flip_boolean);
 #endif // STBI_WRITE_NO_STDIO
 
 #include <stdarg.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
+// Reserve room for zlib expansion and PNG chunk lengths in signed int arithmetic
+#define STBIW_MAX_SAFE_INPUT (INT_MAX / 8)
 
 #if defined(STBIW_MALLOC) && defined(STBIW_FREE) && (defined(STBIW_REALLOC) || defined(STBIW_REALLOC_SIZED))
 // ok
@@ -825,14 +829,19 @@ STBIWDEF int stbi_write_hdr(char const *filename, int x, int y, int comp, const 
 
 static void *stbiw__sbgrowf(void **arr, int increment, int itemsize)
 {
-   int m = *arr ? 2*stbiw__sbm(*arr)+increment : increment+1;
-   void *p = STBIW_REALLOC_SIZED(*arr ? stbiw__sbraw(*arr) : 0, *arr ? (stbiw__sbm(*arr)*itemsize + sizeof(int)*2) : 0, itemsize * m + sizeof(int)*2);
-   STBIW_ASSERT(p);
-   if (p) {
-      if (!*arr) ((int *) p)[1] = 0;
-      *arr = (void *) ((int *) p + 2);
-      stbiw__sbm(*arr) = m;
-   }
+   int old_capacity = *arr ? stbiw__sbm(*arr) : 0;
+   size_t m;
+   void *p;
+   if (increment < 0 || itemsize <= 0 || old_capacity < 0)
+      abort();
+   m = *arr ? (size_t)old_capacity * 2 + increment : (size_t)increment + 1;
+   if (m > INT_MAX || m > (INT_MAX - sizeof(int)*2) / (size_t)itemsize)
+      abort();
+   p = STBIW_REALLOC_SIZED(*arr ? stbiw__sbraw(*arr) : 0, *arr ? (size_t)old_capacity*itemsize + sizeof(int)*2 : 0, (size_t)itemsize * m + sizeof(int)*2);
+   if (!p) abort();
+   if (!*arr) ((int *) p)[1] = 0;
+   *arr = (void *) ((int *) p + 2);
+   stbiw__sbm(*arr) = (int)m;
    return *arr;
 }
 
@@ -894,6 +903,8 @@ static unsigned int stbiw__zhash(unsigned char *data)
 
 STBIWDEF unsigned char * stbi_zlib_compress(unsigned char *data, int data_len, int *out_len, int quality)
 {
+   if (!data || !out_len || data_len < 0 || data_len > STBIW_MAX_SAFE_INPUT)
+      return NULL;
 #ifdef STBIW_ZLIB_COMPRESS
    // user provided a zlib compress implementation, use that
    return STBIW_ZLIB_COMPRESS(data, data_len, out_len, quality);
@@ -909,6 +920,7 @@ STBIWDEF unsigned char * stbi_zlib_compress(unsigned char *data, int data_len, i
    if (hash_table == NULL)
       return NULL;
    if (quality < 5) quality = 5;
+   if (quality > 128) quality = 128;
 
    stbiw__sbpush(out, 0x78);   // DEFLATE 32K window
    stbiw__sbpush(out, 0x5e);   // FLEVEL = 1
@@ -1133,29 +1145,42 @@ STBIWDEF unsigned char *stbi_write_png_to_mem(const unsigned char *pixels, int s
    unsigned char *out,*o, *filt, *zlib;
    signed char *line_buffer;
    int j,zlen;
+   int row_bytes;
+   const int png_overhead = 8 + 12+13 + 12 + 12;
+
+   if (!pixels || !out_len || x <= 0 || y <= 0 || n < 1 || n > 4 ||
+       x > (INT_MAX / n) - 1)
+      return NULL;
+   row_bytes = x * n;
+   if ((size_t)(row_bytes + 1) * y > STBIW_MAX_SAFE_INPUT ||
+       stride_bytes < 0 || (stride_bytes && stride_bytes < row_bytes))
+      return NULL;
 
    if (stride_bytes == 0)
-      stride_bytes = x * n;
+      stride_bytes = row_bytes;
+   if (stride_bytes > INT_MAX / y)
+      return NULL;
 
    if (force_filter >= 5) {
       force_filter = -1;
    }
 
-   filt = (unsigned char *) STBIW_MALLOC((x*n+1) * y); if (!filt) return 0;
-   line_buffer = (signed char *) STBIW_MALLOC(x * n); if (!line_buffer) { STBIW_FREE(filt); return 0; }
+   filt = (unsigned char *) STBIW_MALLOC((size_t)(row_bytes + 1) * y); if (!filt) return 0;
+   line_buffer = (signed char *) STBIW_MALLOC((size_t)row_bytes); if (!line_buffer) { STBIW_FREE(filt); return 0; }
    for (j=0; j < y; ++j) {
       int filter_type;
       if (force_filter > -1) {
          filter_type = force_filter;
          stbiw__encode_png_line((unsigned char*)(pixels), stride_bytes, x, y, j, n, force_filter, line_buffer);
       } else { // Estimate the best filter by running through all of them:
-         int best_filter = 0, best_filter_val = 0x7fffffff, est, i;
+         int best_filter = 0, i;
+         size_t best_filter_val = (size_t)-1, est;
          for (filter_type = 0; filter_type < 5; filter_type++) {
             stbiw__encode_png_line((unsigned char*)(pixels), stride_bytes, x, y, j, n, filter_type, line_buffer);
 
             // Estimate the entropy of the line using this filter; the less, the better.
             est = 0;
-            for (i = 0; i < x*n; ++i) {
+            for (i = 0; i < row_bytes; ++i) {
                est += abs((signed char) line_buffer[i]);
             }
             if (est < best_filter_val) {
@@ -1169,18 +1194,22 @@ STBIWDEF unsigned char *stbi_write_png_to_mem(const unsigned char *pixels, int s
          }
       }
       // when we get here, filter_type contains the filter type, and line_buffer contains the data
-      filt[j*(x*n+1)] = (unsigned char) filter_type;
-      STBIW_MEMMOVE(filt+j*(x*n+1)+1, line_buffer, x*n);
+      filt[(size_t)j*(row_bytes+1)] = (unsigned char) filter_type;
+      STBIW_MEMMOVE(filt+(size_t)j*(row_bytes+1)+1, line_buffer, (size_t)row_bytes);
    }
    STBIW_FREE(line_buffer);
-   zlib = stbi_zlib_compress(filt, y*( x*n+1), &zlen, stbi_write_png_compression_level);
+   zlib = stbi_zlib_compress(filt, y*(row_bytes+1), &zlen, stbi_write_png_compression_level);
    STBIW_FREE(filt);
    if (!zlib) return 0;
+   if (zlen < 0 || zlen > INT_MAX - png_overhead) {
+      STBIW_FREE(zlib);
+      return 0;
+   }
 
    // each tag requires 12 bytes of overhead
-   out = (unsigned char *) STBIW_MALLOC(8 + 12+13 + 12+zlen + 12);
-   if (!out) return 0;
-   *out_len = 8 + 12+13 + 12+zlen + 12;
+   out = (unsigned char *) STBIW_MALLOC(png_overhead + zlen);
+   if (!out) { STBIW_FREE(zlib); return 0; }
+   *out_len = png_overhead + zlen;
 
    o=out;
    STBIW_MEMMOVE(o,sig,8); o+= 8;
