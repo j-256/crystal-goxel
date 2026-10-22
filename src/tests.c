@@ -171,6 +171,90 @@ static void test_png_export_dimensions(void)
     goxel.image->export_height = height;
 }
 
+static void write_qbcl_fixture(const char *path, const uint32_t dimensions[3],
+                               const uint8_t *compressed, size_t compressed_size)
+{
+    const uint32_t versions[2] = {1, 1};
+    const uint32_t thumbnail[2] = {0, 0};
+    const uint32_t metadata[7] = {0};
+    const uint8_t padding[16] = {0};
+    const uint32_t node_type = 0;
+    const uint32_t name_size = 1;
+    const int32_t position[3] = {0};
+    const float pivot[3] = {0};
+    const uint32_t data_size = compressed_size;
+    FILE *file = fopen(path, "wb");
+
+    TEST(file != NULL);
+    TEST(fwrite("QBCL", 4, 1, file) == 1);
+    TEST(fwrite(versions, sizeof(versions), 1, file) == 1);
+    TEST(fwrite(thumbnail, sizeof(thumbnail), 1, file) == 1);
+    TEST(fwrite(metadata, sizeof(metadata), 1, file) == 1);
+    TEST(fwrite(padding, sizeof(padding), 1, file) == 1);
+    TEST(fwrite(&node_type, sizeof(node_type), 1, file) == 1);
+    TEST(fwrite(padding, 4, 1, file) == 1);
+    TEST(fwrite(&name_size, sizeof(name_size), 1, file) == 1);
+    TEST(fwrite("L", 1, 1, file) == 1);
+    TEST(fwrite(padding, 3, 1, file) == 1);
+    TEST(fwrite(dimensions, sizeof(uint32_t), 3, file) == 3);
+    TEST(fwrite(position, sizeof(position), 1, file) == 1);
+    TEST(fwrite(pivot, sizeof(pivot), 1, file) == 1);
+    TEST(fwrite(&data_size, sizeof(data_size), 1, file) == 1);
+    TEST(fwrite(compressed, compressed_size, 1, file) == 1);
+    TEST(fclose(file) == 0);
+}
+
+static void test_qbcl_matrix_bounds(void)
+{
+    const char *path = "/tmp/goxel_test.qbcl";
+    const uint32_t versions[2] = {1, 1};
+    const uint32_t oversized_thumbnail[2] = {UINT32_MAX, UINT32_MAX};
+    const uint32_t valid_dimensions[3] = {1, 1, 1};
+    const uint32_t oversized_dimensions[3] = {INT_MAX, 2, 2};
+    const uint8_t valid_data[] = {
+        0x78, 0x9c, 0x63, 0x64, 0xf8, 0xcf, 0xc0,
+        0xf0, 0x1f, 0x00, 0x05, 0x07, 0x02, 0x00,
+    };
+    const uint8_t truncated_command[] = {
+        0x78, 0x9c, 0x63, 0x64, 0xf8, 0xcf,
+        0x00, 0x00, 0x02, 0x06, 0x01, 0x01,
+    };
+    int position[3] = {0};
+    uint8_t color[4];
+    volume_iterator_t iter = {0};
+    FILE *file;
+
+    if (DEFINED(WIN32)) return;
+    write_qbcl_fixture(path, valid_dimensions, valid_data, sizeof(valid_data));
+    TEST(goxel_import_file(path, NULL) == 0);
+    volume_get_at(goxel.image->active_layer->volume, &iter, position, color);
+    TEST(color[0] == 255 && color[3] == 255);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+
+    write_qbcl_fixture(path, oversized_dimensions, valid_data,
+                       sizeof(valid_data));
+    TEST(goxel_import_file(path, NULL) != 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+
+    write_qbcl_fixture(path, valid_dimensions, truncated_command,
+                       sizeof(truncated_command));
+    TEST(goxel_import_file(path, NULL) != 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+
+    file = fopen(path, "wb");
+    TEST(file != NULL);
+    TEST(fwrite("QBCL", 4, 1, file) == 1);
+    TEST(fwrite(versions, sizeof(versions), 1, file) == 1);
+    TEST(fwrite(oversized_thumbnail, sizeof(oversized_thumbnail), 1,
+                file) == 1);
+    TEST(fclose(file) == 0);
+    TEST(goxel_import_file(path, NULL) != 0);
+    sys_delete_file(path);
+}
+
 void tests_run(void)
 {
     test_load_file_v2();
@@ -178,4 +262,5 @@ void tests_run(void)
     test_load_corrupt();
     test_old_vox_dimensions();
     test_png_export_dimensions();
+    test_qbcl_matrix_bounds();
 }
