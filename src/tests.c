@@ -327,6 +327,48 @@ static void test_kvx_bounds(void)
     sys_delete_file(path);
 }
 
+static void test_kvx_export_bounds(void)
+{
+    const char *path = "/tmp/goxel_test_export.kvx";
+    const file_format_t *format = file_format_get(NULL, "kvx", "w");
+    const int aabb[2][3] = {{0, 0, 0}, {1, 1, 1}};
+    const int pos[3] = {0};
+    const uint8_t color[4] = {255, 0, 0, 255};
+    float box[4][4];
+    uint32_t header[4];
+    FILE *file;
+
+    if (DEFINED(WIN32)) return;
+    TEST(format != NULL);
+    mat4_copy(goxel.image->box, box);
+    volume_set_at(goxel.image->active_layer->volume, NULL, pos, color);
+    bbox_from_aabb(goxel.image->box, aabb);
+    TEST(format->export_func(format, goxel.image, path) == 0);
+    file = fopen(path, "rb");
+    TEST(file != NULL);
+    TEST(fread(header, sizeof(header), 1, file) == 1);
+    TEST(fclose(file) == 0);
+    TEST(header[1] == 1 && header[2] == 1 && header[3] == 1);
+
+    goxel.image->box[0][0] = INFINITY;
+    TEST(format->export_func(format, goxel.image, path) != 0);
+    goxel.image->box[0][0] = (float)INT_MAX;
+    TEST(format->export_func(format, goxel.image, path) != 0);
+    goxel.image->box[0][0] = 0.5;
+    goxel.image->box[2][2] = 128.5;
+    TEST(format->export_func(format, goxel.image, path) != 0);
+    mat4_copy(box, goxel.image->box);
+    file = fopen(path, "rb");
+    TEST(file != NULL);
+    TEST(fread(header, sizeof(header), 1, file) == 1);
+    TEST(fclose(file) == 0);
+    TEST(header[1] == 1 && header[2] == 1 && header[3] == 1);
+    TEST(goxel_import_file(path, NULL) == 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+    sys_delete_file(path);
+}
+
 void tests_run(void)
 {
     test_load_file_v2();
@@ -337,4 +379,5 @@ void tests_run(void)
     test_qbcl_matrix_bounds();
     test_kv6_bounds();
     test_kvx_bounds();
+    test_kvx_export_bounds();
 }
