@@ -21,6 +21,7 @@
 #include "utils/color.h"
 
 #include "../ext_src/meshoptimizer/meshoptimizer.h"
+#include <limits.h>
 
 static const int N = BLOCK_SIZE;
 
@@ -299,25 +300,47 @@ int volume_generate_vertices(const volume_t *volume, const int block_pos[3],
     return nb;
 }
 
-static void fill_mesh(volume_mesh_t *mesh,
+static bool fill_mesh(volume_mesh_t *mesh,
                       const voxel_vertex_t *verts, int nb, int size,
                       int subdivide, const int bpos[3],
                       const palette_t *palette)
 {
     int i, c, idx, s = 0;
+    int index_stride;
+    size_t added_vertices, added_indices;
+    typeof(*mesh->vertices) *vertices;
+    typeof(*mesh->indices) *indices;
     float normal[3];
     float color[4];
 
+    if (nb <= 0 || (size != 3 && size != 4) || subdivide <= 0 ||
+        mesh->vertices_count < 0 || mesh->indices_count < 0)
+        return false;
+    index_stride = size == 4 ? 6 : 3;
+    if (nb > (INT_MAX - mesh->vertices_count) / size ||
+        nb > (INT_MAX - mesh->indices_count) / index_stride)
+        return false;
+    added_vertices = (size_t)nb * size;
+    added_indices = (size_t)nb * index_stride;
+    if ((size_t)mesh->vertices_count + added_vertices >
+        SIZE_MAX / sizeof(*mesh->vertices) ||
+        (size_t)mesh->indices_count + added_indices >
+        SIZE_MAX / sizeof(*mesh->indices)) return false;
+
     // The palette texture size.
-    if (palette != NULL)
-        s = max(next_pow2(ceil(log2(palette->size))), 16);
+    if (palette != NULL) {
+        if (palette->size <= 0) return false;
+        s = max(next_pow2(max(ceil(log2(palette->size)), 1)), 16);
+    }
 
     // Fill up the vertices.
-    mesh->vertices = realloc(
-            mesh->vertices, (mesh->vertices_count + nb * size) *
-            sizeof(*mesh->vertices));
+    vertices = realloc(mesh->vertices,
+                       ((size_t)mesh->vertices_count + added_vertices) *
+                       sizeof(*mesh->vertices));
+    if (!vertices) return false;
+    mesh->vertices = vertices;
     memset(mesh->vertices + mesh->vertices_count, 0,
-           nb * size * sizeof(*mesh->vertices));
+           added_vertices * sizeof(*mesh->vertices));
     for (i = 0; i < nb * size; i++) {
         idx = mesh->vertices_count + i;
         normal[0] = verts[i].normal[0];
@@ -339,26 +362,25 @@ static void fill_mesh(volume_mesh_t *mesh,
             mesh->vertices[idx].color[3] = color[3];
         } else {
             c = palette_search(palette, verts[i].color, true);
-            assert(c != -1);
+            if (c < 0) return false;
             mesh->vertices[idx].texcoord[0] = (c % s + 0.5) / s;
             mesh->vertices[idx].texcoord[1] = (c / s + 0.5) / s;
         }
     }
 
     // Add the indices.
+    indices = realloc(mesh->indices,
+                      ((size_t)mesh->indices_count + added_indices) *
+                      sizeof(*mesh->indices));
+    if (!indices) return false;
+    mesh->indices = indices;
     if (size == 4) {
-        mesh->indices = realloc(
-                mesh->indices, (mesh->indices_count + 6 * nb) *
-                sizeof(*mesh->indices));
         for (i = 0; i < nb * 6; i++) {
             mesh->indices[mesh->indices_count + i] = mesh->vertices_count +
                 (i / 6) * 4 + ((int[]){0, 1, 2, 2, 3, 0})[i % 6];
         }
         mesh->indices_count += nb * 6;
     } else {
-        mesh->indices = realloc(
-                mesh->indices, (mesh->indices_count + 3 * nb) *
-                sizeof(*mesh->indices));
         for (i = 0; i < nb * 3; i++) {
             mesh->indices[mesh->indices_count + i] = mesh->vertices_count + i;
         }
@@ -366,9 +388,10 @@ static void fill_mesh(volume_mesh_t *mesh,
     }
 
     mesh->vertices_count += nb * size;
+    return true;
 }
 
-static void optimize_mesh(volume_mesh_t *mesh, float simplify)
+static bool optimize_mesh(volume_mesh_t *mesh, float simplify)
 {
     unsigned int *remap;
     unsigned int *tmp_indices;
@@ -376,19 +399,31 @@ static void optimize_mesh(volume_mesh_t *mesh, float simplify)
     size_t vertices_count;
     size_t indices_count;
     int target_index_count;
-	float target_error = 1e-2f;
+    float target_error = 1e-2f;
 
+    if (!mesh->vertices_count || !mesh->indices_count) return true;
+    if (!(simplify >= 0 && simplify <= 1)) simplify = 0;
     // Merge duplicated vertices.
     remap = calloc(mesh->vertices_count, sizeof(unsigned int));
+    if (!remap) return false;
     vertices_count = meshopt_generateVertexRemap(
             remap, mesh->indices, mesh->indices_count, mesh->vertices,
             mesh->vertices_count, sizeof(*mesh->vertices));
 
     tmp_indices = malloc(mesh->indices_count * sizeof(*tmp_indices));
+    if (!tmp_indices) {
+        free(remap);
+        return false;
+    }
     meshopt_remapIndexBuffer(
             tmp_indices, mesh->indices, mesh->indices_count, remap);
 
     tmp_vertices = malloc(vertices_count * sizeof(*mesh->vertices));
+    if (!tmp_vertices) {
+        free(remap);
+        free(tmp_indices);
+        return false;
+    }
     meshopt_remapVertexBuffer(
             tmp_vertices, mesh->vertices, mesh->vertices_count,
             sizeof(*mesh->vertices), remap);
@@ -399,7 +434,8 @@ static void optimize_mesh(volume_mesh_t *mesh, float simplify)
     mesh->vertices_count = vertices_count;
 
     // Also simplify the mesh if required.
-	target_index_count = (int)(mesh->indices_count * (1 - simplify));
+    target_index_count = (int)((double)mesh->indices_count *
+                               (1.0 - (double)simplify));
     target_index_count = fmax(target_index_count, 1);
     if (target_index_count < mesh->indices_count) {
         indices_count = meshopt_simplify(
@@ -418,6 +454,7 @@ static void optimize_mesh(volume_mesh_t *mesh, float simplify)
 
     free(tmp_vertices);
     free(tmp_indices);
+    return true;
 }
 
 volume_mesh_t *volume_generate_mesh(
@@ -430,18 +467,30 @@ volume_mesh_t *volume_generate_mesh(
     int i, nb, size, subdivide;
     volume_mesh_t *mesh = calloc(1, sizeof(*mesh));
 
-    verts = calloc(N * N * N * 6 * 4, sizeof(*verts));
+    if (!mesh) return NULL;
+    verts = calloc((size_t)N * N * N * 6 * 4, sizeof(*verts));
+    if (!verts) {
+        free(mesh);
+        return NULL;
+    }
     iter = volume_get_iterator(volume,
             VOLUME_ITER_TILES | VOLUME_ITER_INCLUDES_NEIGHBORS);
     while (volume_iter(&iter, bpos)) {
         nb = volume_generate_vertices(volume, bpos, effects, verts,
                                       &size, &subdivide);
         if (nb == 0) continue;
-        fill_mesh(mesh, verts, nb, size, subdivide, bpos, palette);
+        if (!fill_mesh(mesh, verts, nb, size, subdivide, bpos, palette)) {
+            free(verts);
+            volume_mesh_free(mesh);
+            return NULL;
+        }
     }
     free(verts);
 
-    optimize_mesh(mesh, simplify);
+    if (!optimize_mesh(mesh, simplify)) {
+        volume_mesh_free(mesh);
+        return NULL;
+    }
 
     mesh->pos_min[0] = +FLT_MAX;
     mesh->pos_min[1] = +FLT_MAX;

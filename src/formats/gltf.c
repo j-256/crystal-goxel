@@ -290,7 +290,7 @@ static cgltf_material *get_default_mat(
     return g->default_mat;
 }
 
-static void save_layer(gltf_t *g, cgltf_node *root_node,
+static bool save_layer(gltf_t *g, cgltf_node *root_node,
                        const image_t *img, const layer_t *layer,
                        const palette_t *palette,
                        int palette_pix_size,
@@ -306,10 +306,11 @@ static void save_layer(gltf_t *g, cgltf_node *root_node,
     mesh = volume_generate_mesh(
             layer->volume, goxel.rend.settings.effects, palette,
             g_export_options.simplify);
+    if (!mesh) return false;
 
     if (mesh->vertices_count == 0) {
         volume_mesh_free(mesh);
-        return;
+        return true;
     }
 
     gmesh = add_item(g->data, meshes);
@@ -380,6 +381,7 @@ static void save_layer(gltf_t *g, cgltf_node *root_node,
     *add_item(root_node, children) = node;
 
     volume_mesh_free(mesh);
+    return true;
 }
 
 static bool create_palette_texture(
@@ -481,8 +483,11 @@ static int gltf_export(const image_t *img, const char *path,
     ALLOC(root_node->children, DL_SIZE(img->layers));
     DL_FOREACH(img->layers, layer) {
         if (options->visible_only && !layer->visible) continue;
-        save_layer(&g, root_node, img, layer,
-                   palette, palette_pix_size, options);
+        if (!save_layer(&g, root_node, img, layer,
+                        palette, palette_pix_size, options)) {
+            LOG_E("Cannot create glTF layer mesh");
+            goto end;
+        }
     }
 
     if (g.binary) {
