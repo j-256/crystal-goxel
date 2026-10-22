@@ -54,13 +54,13 @@ texture_t *texture_new_from_buf(const uint8_t *data,
                                 int w, int h, int bpp, int flags);
 texture_t *texture_new_surface(int w, int h, int flags);
 texture_t *texture_new_buffer(int w, int h, int flags);
-void texture_get_data(const texture_t *tex, int w, int h, int bpp,
+bool texture_get_data(const texture_t *tex, int w, int h, int bpp,
                       uint8_t *buf);
 
 texture_t *texture_copy(texture_t *tex);
 void texture_delete(texture_t *tex);
 
-void texture_set_data(texture_t *tex,
+bool texture_set_data(texture_t *tex,
                       const uint8_t *data, int w, int h, int bpp);
 
 #endif // TEXTURE_H

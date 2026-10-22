@@ -22,6 +22,7 @@
 #include "utils/gl.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -63,17 +64,26 @@ static void blit(const uint8_t *src, int src_w, int src_h, int bpp,
 {
     int i, j;
     for (i = 0; i < src_h; i++) for (j = 0; j < src_w; j++) {
-        memcpy(&dst[(i * dst_w + j) * bpp], &src[(i * src_w + j) * bpp], bpp);
+        memcpy(&dst[((size_t)i * dst_w + j) * bpp],
+               &src[((size_t)i * src_w + j) * bpp], bpp);
     }
 }
 
-void texture_set_data(texture_t *tex,
+bool texture_set_data(texture_t *tex,
                       const uint8_t *data, int w, int h, int bpp)
 {
     uint8_t *buf = NULL;
-    assert(tex->tex);
+    size_t pixels;
+
+    if (!tex || !tex->tex || !data || w <= 0 || h <= 0 ||
+        bpp <= 0 || bpp > 4 || w > tex->tex_w || h > tex->tex_h ||
+        tex->tex_w <= 0 || tex->tex_h <= 0 ||
+        (size_t)tex->tex_w > SIZE_MAX / (size_t)tex->tex_h / bpp)
+        return false;
+    pixels = (size_t)tex->tex_w * tex->tex_h;
     if (!is_pow2(w) || !is_pow2(h)) {
-        buf = calloc(bpp, tex->tex_w * tex->tex_h);
+        buf = calloc(pixels, bpp);
+        if (!buf) return false;
         blit(data, w, h, bpp, buf, tex->tex_w, tex->tex_h);
         data = buf;
     }
@@ -83,13 +93,17 @@ void texture_set_data(texture_t *tex,
     free(buf);
     if (tex->flags & TF_MIPMAP)
         GL(glGenerateMipmap(GL_TEXTURE_2D));
+    return true;
 }
 
 texture_t *texture_new_from_buf(const uint8_t *data,
                                 int w, int h, int bpp, int flags)
 {
     texture_t *tex;
+    if (!data || w <= 0 || h <= 0 || w > INT_MAX / 2 ||
+        h > INT_MAX / 2 || bpp < 2 || bpp > 4) return NULL;
     tex = calloc(1, sizeof(*tex));
+    if (!tex) return NULL;
     tex->tex_w = next_pow2(w);
     tex->tex_h = next_pow2(h);
     tex->w = w;
@@ -97,8 +111,11 @@ texture_t *texture_new_from_buf(const uint8_t *data,
     tex->flags = TF_HAS_TEX | flags;
     tex->format = (int[]){0, 0, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA}[bpp];
     texture_create_empty(tex);
-    texture_set_data(tex, data, w, h, bpp);
     tex->ref = 1;
+    if (!texture_set_data(tex, data, w, h, bpp)) {
+        texture_delete(tex);
+        return NULL;
+    }
     return tex;
 }
 
@@ -160,23 +177,29 @@ texture_t *texture_copy(texture_t *tex)
     return tex;
 }
 
-void texture_get_data(const texture_t *tex, int w, int h, int bpp,
+bool texture_get_data(const texture_t *tex, int w, int h, int bpp,
                       uint8_t *buf)
 {
     uint8_t *tmp;
     size_t i, j;
-    tmp = calloc(w * h, 4);
+
+    if (!tex || !buf || w <= 0 || h <= 0 || bpp <= 0 || bpp > 4 ||
+        w > tex->tex_w || h > tex->tex_h ||
+        (size_t)w > SIZE_MAX / 4 / (size_t)h) return false;
+    tmp = calloc((size_t)w * h, 4);
+    if (!tmp) return false;
     GL(glBindFramebuffer(GL_FRAMEBUFFER, tex->framebuffer));
     GL(glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tmp));
     // Flip output y and remove alpha if needed.
     for (i = 0; i < h; i++) {
         for (j = 0; j < w; j++) {
-            memcpy(&buf[(i * w + j) * bpp],
-                   &tmp[((h - i - 1) * w  + j) * 4],
+            memcpy(&buf[(i * (size_t)w + j) * bpp],
+                   &tmp[(((size_t)h - i - 1) * w  + j) * 4],
                    bpp);
         }
     }
     free(tmp);
+    return true;
 }
 
 /*

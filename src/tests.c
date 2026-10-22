@@ -369,6 +369,20 @@ static void test_kvx_export_bounds(void)
     sys_delete_file(path);
 }
 
+static void test_texture_transfer_bounds(void)
+{
+    const uint8_t color[4] = {255, 0, 0, 255};
+    uint8_t pixel[4];
+    texture_t *tex = texture_new_from_buf(color, 1, 1, 4, 0);
+
+    TEST(tex != NULL);
+    TEST(!texture_set_data(tex, color, INT_MAX, 2, 4));
+    TEST(!texture_get_data(tex, INT_MAX, 2, 4, pixel));
+    TEST(texture_set_data(tex, color, 1, 1, 4));
+    texture_delete(tex);
+    TEST(goxel_render_to_buf(pixel, 1, 1, 4));
+}
+
 void tests_run(void)
 {
     test_load_file_v2();
@@ -380,4 +394,5 @@ void tests_run(void)
     test_kv6_bounds();
     test_kvx_bounds();
     test_kvx_export_bounds();
+    test_texture_transfer_bounds();
 }

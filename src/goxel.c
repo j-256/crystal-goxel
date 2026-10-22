@@ -48,9 +48,10 @@ texture_t *texture_new_image(const char *path, int flags)
         data = read_file(path, &size);
         need_to_free = true;
     }
+    if (!data) return NULL;
     img = img_read_from_mem(data, size, &w, &h, &bpp);
-    tex = texture_new_from_buf(img, w, h, bpp, flags);
-    tex->path = strdup(path);
+    tex = img ? texture_new_from_buf(img, w, h, bpp, flags) : NULL;
+    if (tex) tex->path = strdup(path);
     free(img);
     if (need_to_free) free(data);
     return tex;
@@ -1058,7 +1059,8 @@ static void render_pathtrace_view(const float viewport[4])
     mat4_iscale(mat, viewport[2], viewport[3], 1);
     mat4_itranslate(mat, 0.5, 0.5, 0);
     mat4_iscale(mat, min(a, 1.f), min(1.f / a, 1.f), 1);
-    texture_set_data(pt->texture, pt->buf, pt->w, pt->h, 4);
+    if (!texture_set_data(pt->texture, pt->buf, pt->w, pt->h, 4))
+        return;
     render_img(&goxel.rend, pt->texture, mat,
                EFFECT_NO_SHADING | EFFECT_PROJ_SCREEN | EFFECT_ANTIALIASING);
     render_submit(&goxel.rend, viewport, goxel.back_color);
@@ -1350,6 +1352,10 @@ bool goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
 
     volume = goxel_get_layers_volume(goxel.image);
     fbo = texture_new_buffer(w * 2, h * 2, TF_DEPTH);
+    if (!fbo) {
+        free(tmp_buf);
+        return false;
+    }
 
     mat4_copy(camera->view_mat, rend.view_mat);
     mat4_copy(camera->proj_mat, rend.proj_mat);
@@ -1361,7 +1367,11 @@ bool goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
     if (crystal_active()) crystal_render(&rend, false);
     else render_volume(&rend, volume, NULL, 0);
     render_submit(&rend, rect, (bpp == 3) ? goxel.back_color : NULL);
-    texture_get_data(fbo, w * 2, h * 2, bpp, tmp_buf);
+    if (!texture_get_data(fbo, w * 2, h * 2, bpp, tmp_buf)) {
+        free(tmp_buf);
+        texture_delete(fbo);
+        return false;
+    }
     img_downsample(tmp_buf, w * 2, h * 2, bpp, buf);
     free(tmp_buf);
     texture_delete(fbo);
