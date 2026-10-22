@@ -109,20 +109,25 @@ static shape_data create_shape_for_tile(
     voxel_vertex_t* vertices;
     int i, nb, size, subdivide;
     shape_data shape = {};
+    const size_t vertex_capacity =
+        (size_t)TILE_SIZE * TILE_SIZE * TILE_SIZE * 6 * 4;
+    size_t vertex_count;
 
-    vertices = (voxel_vertex_t*)calloc(
-                TILE_SIZE * TILE_SIZE * TILE_SIZE * 6 * 4,
-                sizeof(*vertices));
+    vertices = (voxel_vertex_t*)calloc(vertex_capacity, sizeof(*vertices));
+    if (!vertices) return shape;
     nb = volume_generate_vertices(volume, tile_pos,
                                 goxel.rend.settings.effects,
                                 vertices, &size, &subdivide);
     if (!nb) goto end;
+    if (nb < 0 || size <= 0 ||
+        (size_t)nb > vertex_capacity / (size_t)size) goto end;
+    vertex_count = (size_t)nb * size;
 
     // Set vertices data.
-    shape.positions.resize(nb * size);
-    shape.colors.resize(nb * size);
-    shape.normals.resize(nb * size);
-    for (i = 0; i < nb * size; i++) {
+    shape.positions.resize(vertex_count);
+    shape.colors.resize(vertex_count);
+    shape.normals.resize(vertex_count);
+    for (i = 0; (size_t)i < vertex_count; i++) {
         shape.positions[i] = {vertices[i].pos[0] / (float)subdivide,
                               vertices[i].pos[1] / (float)subdivide,
                               vertices[i].pos[2] / (float)subdivide};

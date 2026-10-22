@@ -1032,14 +1032,21 @@ static void render_pathtrace_view(const float viewport[4])
 {
     pathtracer_t *pt = &goxel.pathtracer;
     float a, mat[4][4];
+    int w = goxel.image->export_width;
+    int h = goxel.image->export_height;
+    uint8_t *buf;
+
+    if (w <= 0 || h <= 0 || (size_t)w > INT_MAX / 4 / (size_t)h)
+        return;
     // Recreate the buffer if needed.
     if (    !pt->buf ||
-            pt->w != goxel.image->export_width ||
-            pt->h != goxel.image->export_height) {
+            pt->w != w || pt->h != h) {
+        buf = calloc((size_t)w * h, 4);
+        if (!buf) return;
         free(pt->buf);
-        pt->w = goxel.image->export_width;
-        pt->h = goxel.image->export_height;
-        pt->buf = calloc(pt->w * pt->h, 4);
+        pt->w = w;
+        pt->h = h;
+        pt->buf = buf;
         texture_delete(pt->texture);
         pt->texture = texture_new_surface(pt->w, pt->h, 0);
     }
