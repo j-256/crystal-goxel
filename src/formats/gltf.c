@@ -20,6 +20,7 @@
 
 #include "file_format.h"
 #include "utils/vec.h"
+#include <limits.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
@@ -306,7 +307,10 @@ static void save_layer(gltf_t *g, cgltf_node *root_node,
             layer->volume, goxel.rend.settings.effects, palette,
             g_export_options.simplify);
 
-    if (mesh->vertices_count == 0) return;
+    if (mesh->vertices_count == 0) {
+        volume_mesh_free(mesh);
+        return;
+    }
 
     gmesh = add_item(g->data, meshes);
     ALLOC(gmesh->primitives, 1);
@@ -378,7 +382,7 @@ static void save_layer(gltf_t *g, cgltf_node *root_node,
     volume_mesh_free(mesh);
 }
 
-static void create_palette_texture(
+static bool create_palette_texture(
         gltf_t *g, const image_t *img, int pix_size)
 {
     // Create the global palette with all the colors.
@@ -401,9 +405,12 @@ static void create_palette_texture(
     }
 
     s = ceil(sqrt(g->palette.size));
-    s = max(next_pow2(s), 16);
+    s = max(next_pow2(max(s, 1)), 16);
+    if (pix_size <= 0 || s > INT_MAX / pix_size) return false;
     s *= pix_size;
-    data = calloc(s * s, sizeof(*data));
+    if (s > INT_MAX / 3 / s) return false;
+    data = calloc((size_t)s * s, sizeof(*data));
+    if (!data) return false;
     // Copy colors as blocks of pix_size x pix_size.
     for (k = 0; k < g->palette.size; k++) {
         x = (k % (s / pix_size)) * pix_size;
@@ -417,6 +424,10 @@ static void create_palette_texture(
     }
     png = img_write_to_mem((void*)data, s, s, 3, &size);
     free(data);
+    if (!png || size <= 0) {
+        free(png);
+        return false;
+    }
     buffer_view = add_blob(g, png, size, NULL);
     image = add_item(g->data, images);
     image->mime_type = strdup("image/png");
@@ -424,9 +435,10 @@ static void create_palette_texture(
     texture = add_item(g->data, textures);
     texture->image = image;
     free(png);
+    return true;
 }
 
-static void gltf_export(const image_t *img, const char *path,
+static int gltf_export(const image_t *img, const char *path,
                         const export_options_t *options, bool binary)
 {
     gltf_t g = {};
@@ -437,12 +449,17 @@ static void gltf_export(const image_t *img, const char *path,
     material_t *mat;
     const palette_t *palette = NULL;
     const int palette_pix_size = 4;
+    int ret = -1;
 
+    if (!path) return -1;
     g.binary = binary;
     gltf_init(&g, options, img);
 
     if (!options->vertex_color) {
-        create_palette_texture(&g, img, palette_pix_size);
+        if (!create_palette_texture(&g, img, palette_pix_size)) {
+            LOG_E("Cannot create glTF palette texture");
+            goto end;
+        }
         palette = &g.palette;
     }
 
@@ -477,24 +494,26 @@ static void gltf_export(const image_t *img, const char *path,
         gltf_options.type = cgltf_file_type_glb;
     }
 
-    cgltf_write_file(&gltf_options, path, g.data);
+    if (cgltf_write_file(&gltf_options, path, g.data) ==
+        cgltf_result_success) ret = 0;
+    if (ret) LOG_E("Cannot write glTF file");
+end:
     cgltf_free(g.data);
     free(g.bin);
     free(g.palette.entries);
+    return ret;
 }
 
 static int export_as_gltf(const file_format_t *format, const image_t *img,
                           const char *path)
 {
-    gltf_export(img, path, &g_export_options, false);
-    return 0;
+    return gltf_export(img, path, &g_export_options, false);
 }
 
 static int export_as_glb(const file_format_t *format, const image_t *img,
                          const char *path)
 {
-    gltf_export(img, path, &g_export_options, true);
-    return 0;
+    return gltf_export(img, path, &g_export_options, true);
 }
 
 static void export_gui(file_format_t *format)

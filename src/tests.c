@@ -383,6 +383,28 @@ static void test_texture_transfer_bounds(void)
     TEST(goxel_render_to_buf(pixel, 1, 1, 4));
 }
 
+static void test_gltf_palette_export(void)
+{
+    const char *path = "/tmp/goxel_test_palette.gltf";
+    const file_format_t *format = file_format_get(NULL, "gltf", "w");
+    const int pos[3] = {0};
+    const uint8_t color[4] = {255, 0, 0, 255};
+    FILE *file;
+
+    if (DEFINED(WIN32)) return;
+    TEST(format != NULL);
+    volume_set_at(goxel.image->active_layer->volume, NULL, pos, color);
+    TEST(format->export_func(format, goxel.image, path) == 0);
+    file = fopen(path, "rb");
+    TEST(file != NULL);
+    TEST(fseek(file, 0, SEEK_END) == 0);
+    TEST(ftell(file) > 0);
+    TEST(fclose(file) == 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+    sys_delete_file(path);
+}
+
 void tests_run(void)
 {
     test_load_file_v2();
@@ -395,4 +417,5 @@ void tests_run(void)
     test_kvx_bounds();
     test_kvx_export_bounds();
     test_texture_transfer_bounds();
+    test_gltf_palette_export();
 }
