@@ -1539,6 +1539,8 @@ extern "C" bool crystal_load(const char *path, bool frame)
         next->pixels.assign(pixels, pixels + 432 * 432 * 4);
         next->atlas = texture_new_from_buf(pixels, 432, 432, 4, TF_NEAREST);
         free(pixels);
+        if (!next->atlas)
+            throw std::runtime_error("Cannot allocate native atlas texture");
         if (same_source) {
             next->source = state->source;
             next->managed = state->managed;

@@ -18,6 +18,7 @@
 
 #include "goxel.h"
 #include "gui.h"
+#include <limits.h>
 
 typedef struct {
     filter_t filter;
@@ -32,17 +33,24 @@ static void volume_mirror(volume_t *volume, int axis, const int aabb[2][3])
     int size[3];
     uint8_t *buffer;
     int i;
-    size_t buffer_offset;
+    size_t buffer_offset, buffer_bytes = 4;
 
-    if (aabb[1][axis] - aabb[0][axis] == 1) {
+    for (i = 0; i < 3; i++) {
+        int64_t extent = (int64_t)aabb[1][i] - aabb[0][i];
+        if (extent <= 0 || extent > INT_MAX ||
+            (size_t)extent > SIZE_MAX / buffer_bytes) {
+            LOG_E("Mirror bounds exceed the voxel buffer limit");
+            return;
+        }
+        size[i] = extent;
+        buffer_bytes *= size[i];
+    }
+    if (size[axis] == 1) return;
+    buffer = malloc(buffer_bytes);
+    if (!buffer) {
+        LOG_E("Cannot allocate mirror voxel buffer");
         return;
     }
-
-    size[0] = aabb[1][0] - aabb[0][0];
-    size[1] = aabb[1][1] - aabb[0][1];
-    size[2] = aabb[1][2] - aabb[0][2];
-
-    buffer = malloc(4 * size[0] * size[1] * size[2]);
 
     for (pos[0] = 0; pos[0] < size[0]; pos[0]++) {
         for (pos[1] = 0; pos[1] < size[1]; pos[1]++) {
@@ -57,8 +65,8 @@ static void volume_mirror(volume_t *volume, int axis, const int aabb[2][3])
                 buffer_pos[axis] = size[axis] - buffer_pos[axis] - 1;
 
                 buffer_offset = 4 * (
-                    buffer_pos[2] * size[0] * size[1] +
-                    buffer_pos[1] * size[0] + buffer_pos[0]
+                    (size_t)buffer_pos[2] * size[0] * size[1] +
+                    (size_t)buffer_pos[1] * size[0] + buffer_pos[0]
                 );
 
                 volume_get_at(volume, NULL, volume_pos, &buffer[buffer_offset]);
@@ -76,8 +84,8 @@ static void volume_mirror(volume_t *volume, int axis, const int aabb[2][3])
                 }
 
                 buffer_offset = 4 * (
-                    pos[2] * size[0] * size[1] +
-                    pos[1] * size[0] + pos[0]
+                    (size_t)pos[2] * size[0] * size[1] +
+                    (size_t)pos[1] * size[0] + pos[0]
                 );
 
                 volume_set_at(volume, NULL, volume_pos, &buffer[buffer_offset]);

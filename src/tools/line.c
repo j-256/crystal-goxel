@@ -149,15 +149,16 @@ static int iter(tool_t *tool_, const painter_t *painter,
                 const float viewport[4])
 {
     tool_line_t *tool = (void*)tool_;
-    float snap_offset;
+    double snap_offset;
 
     if (!tool->volume_orig)
         tool->volume_orig = volume_copy(goxel.image->active_layer->volume);
     if (!tool->volume)
         tool->volume = volume_new();
 
-    snap_offset = goxel.snap_offset * goxel.tool_radius +
+    snap_offset = (double)goxel.snap_offset * goxel.tool_radius +
         ((painter->mode == MODE_OVER) ? 0.5 : -0.5);
+    if (!(fabs(snap_offset) <= FLT_MAX)) return 0;
 
     goxel_gesture3d(&(gesture3d_t) {
         .type = GESTURE3D_TYPE_DRAG,

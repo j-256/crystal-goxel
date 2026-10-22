@@ -189,6 +189,7 @@ static int on_hover(gesture3d_t *gest)
     const painter_t *painter = USER_GET(gest->user, 1);
     float box[4][4];
     bool shift = gest->flags & GESTURE3D_FLAG_SHIFT;
+    double snap_offset;
 
     if (gest->state == GESTURE3D_STATE_END || !gest->snaped) {
         volume_delete(goxel.tool_volume);
@@ -197,8 +198,14 @@ static int on_hover(gesture3d_t *gest)
     }
 
     // Update snap offset in case we press 'space'.
-    gest->snap_offset = goxel.snap_offset * goxel.tool_radius +
-                        ((painter->mode == MODE_OVER) ? 0.5 : -0.5);
+    snap_offset = (double)goxel.snap_offset * goxel.tool_radius +
+                  ((painter->mode == MODE_OVER) ? 0.5 : -0.5);
+    if (!(fabs(snap_offset) <= FLT_MAX)) {
+        volume_delete(goxel.tool_volume);
+        goxel.tool_volume = NULL;
+        return 0;
+    }
+    gest->snap_offset = snap_offset;
 
     if (shift)
         render_line(&goxel.rend, brush->start_pos, gest->pos, NULL, 0);
@@ -227,7 +234,7 @@ static int iter(tool_t *tool, const painter_t *painter,
                 const float viewport[4])
 {
     tool_brush_t *brush = (tool_brush_t*)tool;
-    float snap_offset;
+    double snap_offset;
 
     if (goxel.snap_mask & (SNAP_SELECTION_IN | SNAP_SELECTION_OUT)) {
         render_box(&goxel.rend, goxel.image->selection_box, NULL,
@@ -239,8 +246,9 @@ static int iter(tool_t *tool, const painter_t *painter,
     if (!brush->volume)
         brush->volume = volume_new();
 
-    snap_offset = goxel.snap_offset * goxel.tool_radius +
+    snap_offset = (double)goxel.snap_offset * goxel.tool_radius +
         ((painter->mode == MODE_OVER) ? 0.5 : -0.5);
+    if (!(fabs(snap_offset) <= FLT_MAX)) return 0;
 
     goxel_gesture3d(&(gesture3d_t) {
         .type = GESTURE3D_TYPE_DRAG,

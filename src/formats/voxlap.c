@@ -24,6 +24,7 @@
 
 #include "goxel.h"
 #include "file_format.h"
+#include <limits.h>
 
 /*
  * Structure that represents a single voxel and visible faces.
@@ -47,9 +48,11 @@ typedef struct {
 
 
 #define READ(type, file) \
-    ({ type v; size_t r = fread(&v, sizeof(v), 1, file); (void)r; v;})
+    ({ type v; if (fread(&v, sizeof(v), 1, file) != 1) { \
+        raise("Read file error"); } v;})
 #define WRITE(type, v, file) \
-    ({ type v_ = v; fwrite(&v_, sizeof(v_), 1, file);})
+    do { type v_ = v; if (fwrite(&v_, sizeof(v_), 1, file) != 1) { \
+        raise("Write file error"); } } while (0)
 
 #define raise(msg) do { \
         LOG_E(msg); \
@@ -79,30 +82,52 @@ static int kv6_import(const file_format_t *format, image_t *image,
     FILE *file;
     char magic[4];
     int i, r, ret = 0, w, h, d, blklen, x, y, z = 0, nb, p = 0;
+    uint32_t width, height, depth, block_count;
+    size_t cube_size;
     uint32_t *xoffsets = NULL;
     uint16_t *xyoffsets = NULL;
     uint8_t (*cube)[4] = NULL;
     uint8_t color[4] = {0};
-    (void)r;
     struct {
         uint32_t color;
-        uint8_t zpos;
+        uint16_t zpos;
         uint8_t visface;
     } *blocks = NULL;
 
     file = fopen(path, "rb");
+    if (!file) return -1;
     r = fread(magic, 1, 4, file);
-    if (strncmp(magic, "Kvxl ", 4) != 0) raise("Invalid magic");
-    w = READ(uint32_t, file);
-    h = READ(uint32_t, file);
-    d = READ(uint32_t, file);
-    cube = calloc(w * h * d, sizeof(*cube));
+    if (r != 4 || strncmp(magic, "Kvxl", 4) != 0)
+        raise("Invalid magic");
+    width = READ(uint32_t, file);
+    height = READ(uint32_t, file);
+    depth = READ(uint32_t, file);
+    if (!width || !height || !depth ||
+        width > INT_MAX || height > INT_MAX || depth > INT_MAX ||
+        width > INT_MAX / height ||
+        width * height > INT_MAX / depth)
+        raise("Invalid KV6 dimensions");
+    w = width;
+    h = height;
+    d = depth;
+    cube_size = (size_t)w * h * d;
+    if (cube_size > SIZE_MAX / sizeof(*cube))
+        raise("KV6 voxel buffer too large");
+    cube = calloc(cube_size, sizeof(*cube));
+    if (!cube) raise("Cannot allocate KV6 voxel buffer");
 
     READ(float, file);
     READ(float, file);
     READ(float, file);
-    blklen = READ(uint32_t, file);
-    blocks = calloc(blklen, sizeof(*blocks));
+    block_count = READ(uint32_t, file);
+    if (block_count > INT_MAX ||
+        (block_count && sizeof(*blocks) > SIZE_MAX / block_count))
+        raise("Invalid KV6 block count");
+    blklen = block_count;
+    if (blklen) {
+        blocks = calloc(blklen, sizeof(*blocks));
+        if (!blocks) raise("Cannot allocate KV6 blocks");
+    }
     for (i = 0; i < blklen; i++) {
         blocks[i].color = READ(uint32_t, file);
         blocks[i].zpos = READ(uint16_t, file);
@@ -110,15 +135,18 @@ static int kv6_import(const file_format_t *format, image_t *image,
         READ(uint8_t, file); // lighting
     }
     xoffsets = calloc(w, sizeof(*xoffsets));
-    xyoffsets = calloc(w * h, sizeof(*xyoffsets));
+    xyoffsets = calloc((size_t)w * h, sizeof(*xyoffsets));
+    if (!xoffsets || !xyoffsets) raise("Cannot allocate KV6 offsets");
     for (i = 0; i < w; i++)      xoffsets[i] = READ(uint32_t, file);
     for (i = 0; i < w * h; i++) xyoffsets[i] = READ(uint16_t, file);
 
     for (x = 0; x < w; x++)
     for (y = 0; y < h; y++) {
         nb = xyoffsets[x * h + y];
+        if (nb > blklen - p) raise("KV6 block count exceeds data");
         for (i = 0; i < nb; i++, p++) {
             z = blocks[p].zpos;
+            if (z >= d) raise("KV6 voxel outside dimensions");
             swap_color(blocks[p].color, cube[AT(x, y, z, w, h, d)]);
         }
     }
@@ -128,6 +156,7 @@ static int kv6_import(const file_format_t *format, image_t *image,
     for (x = 0; x < w; x++)
     for (y = 0; y < h; y++) {
         nb = xyoffsets[x * h + y];
+        z = 0;
         for (i = 0; i < nb; i++, p++) {
             if (blocks[p].visface & 0x10) {
                 z = blocks[p].zpos;
@@ -157,67 +186,95 @@ static int kvx_import(const file_format_t *format, image_t *image,
                       const char *path)
 {
     FILE *file;
-    int i, r, ret = 0, nb, size, lastz = 0, len, visface;
+    int i, ret = 0, nb, lastz = 0, len, visface;
     int w, h, d, px, py, pz, x, y, z;
-    int offsetsize, voxdatasize;
+    uint32_t file_size, width, height, depth;
+    size_t cube_size;
+    uint64_t offset_bytes;
     int aabb[2][3];
     uint8_t color = 0;
     uint8_t (*palette)[4] = NULL;
     uint32_t *xoffsets = NULL;
     uint16_t *xyoffsets = NULL;
     uint8_t (*cube)[4] = NULL;
-    long datpos;
-    (void)r;
+    long datpos, palette_pos, slab_pos;
 
     path = path ?: sys_open_file_dialog("Open", NULL, format->exts,
                                         format->exts_desc);
     if (!path) return -1;
 
     file = fopen(path, "rb");
-    size = READ(uint32_t, file);
-    w = READ(uint32_t, file);
-    h = READ(uint32_t, file);
-    d = READ(uint32_t, file);
-    cube = calloc(w * h * d, sizeof(*cube));
+    if (!file) return -1;
+    file_size = READ(uint32_t, file);
+    width = READ(uint32_t, file);
+    height = READ(uint32_t, file);
+    depth = READ(uint32_t, file);
+    if (!width || !height || !depth ||
+        width >= INT_MAX || height >= INT_MAX || depth > INT_MAX ||
+        width > INT_MAX / height ||
+        width * height > INT_MAX / depth ||
+        width > INT_MAX / (height + 1))
+        raise("Invalid KVX dimensions");
+    w = width;
+    h = height;
+    d = depth;
+    cube_size = (size_t)w * h * d;
+    if (cube_size > SIZE_MAX / sizeof(*cube))
+        raise("KVX voxel buffer too large");
+    cube = calloc(cube_size, sizeof(*cube));
+    if (!cube) raise("Cannot allocate KVX voxel buffer");
 
     px = READ(uint32_t, file) / 256;
     py = READ(uint32_t, file) / 256;
     pz = READ(uint32_t, file) / 256;
 
-    xoffsets = calloc(w + 1, sizeof(*xoffsets));
-    xyoffsets = calloc(w * (h + 1), sizeof(*xyoffsets));
+    xoffsets = calloc((size_t)w + 1, sizeof(*xoffsets));
+    xyoffsets = calloc((size_t)w * (h + 1), sizeof(*xyoffsets));
+    if (!xoffsets || !xyoffsets) raise("Cannot allocate KVX offsets");
     for (i = 0; i < w + 1; i++)        xoffsets[i] = READ(uint32_t, file);
     for (i = 0; i < w * (h + 1); i++) xyoffsets[i] = READ(uint16_t, file);
 
-    // Make sure the final x offset points pass the end the voxel data.
-    // Just a warning for the moment.
-    offsetsize = (w + 1) * 4 + w * (h + 1) * 2;
-    voxdatasize = size - 24 - offsetsize;
-    if (xoffsets[w] != offsetsize + voxdatasize) LOG_W("Invalide kvx file");
+    offset_bytes = ((uint64_t)w + 1) * 4 +
+                   (uint64_t)w * (h + 1) * 2;
+    if (file_size < 24 || offset_bytes > file_size - 24)
+        raise("Invalid KVX offsets");
+    if (xoffsets[w] != file_size - 24) LOG_W("Invalid KVX final offset");
 
     datpos = ftell(file);
+    if (datpos < 0) raise("Cannot locate KVX voxel data");
 
     // Read the palette at the end of the file first.
-    fseek(file, -256 * 3, SEEK_END);
+    if (fseek(file, -256 * 3, SEEK_END) != 0)
+        raise("Cannot locate KVX palette");
+    palette_pos = ftell(file);
+    if (palette_pos < datpos) raise("Invalid KVX data length");
     palette = calloc(256, sizeof(*palette));
+    if (!palette) raise("Cannot allocate KVX palette");
     for (i = 0; i < 256; i++) {
         palette[i][0] = clamp(round(READ(uint8_t, file) * 255 / 63.f), 0, 255);
         palette[i][1] = clamp(round(READ(uint8_t, file) * 255 / 63.f), 0, 255);
         palette[i][2] = clamp(round(READ(uint8_t, file) * 255 / 63.f), 0, 255);
         palette[i][3] = 255;
     }
-    fseek(file, datpos, SEEK_SET);
+    if (fseek(file, datpos, SEEK_SET) != 0)
+        raise("Cannot return to KVX voxel data");
 
     for (x = 0; x < w; x++)
     for (y = 0; y < h; y++) {
+        lastz = 0;
         if (xyoffsets[x * (h + 1) + y + 1] < xyoffsets[x * (h + 1) + y])
             raise("Invalid format");
         nb = xyoffsets[x * (h + 1) + y + 1] - xyoffsets[x * (h + 1) + y];
+        slab_pos = ftell(file);
+        if (slab_pos < 0 || nb > palette_pos - slab_pos)
+            raise("KVX slab exceeds voxel data");
         while (nb > 0) {
+            if (nb < 3) raise("Invalid KVX slab length");
             z = READ(uint8_t, file);
             len = READ(uint8_t, file);
             visface = READ(uint8_t, file);
-            assert(z + len - 1  < d);
+            if (!len || len > nb - 3 || z + len > d)
+                raise("Invalid KVX voxel span");
             for (i = 0; i < len; i++) {
                 color = READ(uint8_t, file);
                 memcpy(cube[AT(x, y, z + i, w, h, d)], palette[color], 4);
@@ -315,22 +372,24 @@ static bool slab_append(slab_t *slab, voxel_t *vox)
 static int kvx_export(const file_format_t *format, const image_t *image,
                       const char *path)
 {
-    FILE *file;
-    uint8_t (*palette)[4];
+    FILE *file = NULL;
+    uint8_t (*palette)[4] = NULL;
     volume_iterator_t iter;
     volume_accessor_t acc;
     uint8_t v[4];
     float box[4][4];
     int pos[3], size[3], orig[3], x, y, i;
-    UT_array *slabs;
-    UT_array *voxels;
+    UT_array *slabs = NULL;
+    UT_array *voxels = NULL;
     slab_t *slab;
     voxel_t voxel, *vox;
-    uint32_t ofs;
-    uint32_t *xoffsets;
-    uint32_t *xyoffsets;
+    uint64_t ofs, header_size;
+    uint32_t *xoffsets = NULL;
+    uint16_t *xyoffsets = NULL;
+    size_t xy_count;
+    double dimensions[3], origin[3], pivot[3];
+    int ret = 0;
     bool use_current_palette = false;
-    float pivot[3];
     const volume_t *volume = goxel_get_layers_volume(image);
 
     UT_icd voxel_icd = {sizeof(voxel_t), NULL, NULL, NULL};
@@ -339,14 +398,29 @@ static int kvx_export(const file_format_t *format, const image_t *image,
     mat4_copy(image->box, box);
     if (box_is_null(box)) volume_get_box(volume, true, box);
 
-    size[0] = box[0][0] * 2;
-    size[1] = box[1][1] * 2;
-    size[2] = box[2][2] * 2;
-    orig[0] = box[3][0] - box[0][0];
-    orig[1] = box[3][1] - box[1][1];
-    orig[2] = box[3][2] - box[2][2];
-
-    file = fopen(path, "wb");
+    if (!path) return -1;
+    for (i = 0; i < 3; i++) {
+        dimensions[i] = (double)box[i][i] * 2;
+        origin[i] = (double)box[3][i] - box[i][i];
+        if (!(dimensions[i] >= 1 && dimensions[i] < INT_MAX &&
+              origin[i] >= INT_MIN &&
+              origin[i] <= INT_MAX - dimensions[i] + 1)) return -1;
+        size[i] = dimensions[i];
+        orig[i] = origin[i];
+    }
+    if (size[2] > 256) return -1;
+    pivot[0] = -origin[0] + (size[0] % 2) / 2.;
+    pivot[1] = -origin[1] + (size[1] % 2) / 2.;
+    pivot[2] = size[2] - origin[2];
+    for (i = 0; i < 3; i++) {
+        if (!(pivot[i] * 256 >= INT32_MIN &&
+              pivot[i] * 256 <= INT32_MAX)) return -1;
+    }
+    header_size = ((uint64_t)size[0] + 1) * sizeof(*xoffsets) +
+                  (uint64_t)size[0] * (size[1] + 1) * sizeof(*xyoffsets);
+    if (header_size > UINT32_MAX - 24) return -1;
+    xy_count = (size_t)size[0] * (size[1] + 1);
+    if (xy_count > SIZE_MAX / sizeof(*xyoffsets)) return -1;
 
     // If the current palette is enough to export the model, use it, else
     // create a palette.
@@ -363,6 +437,7 @@ static int kvx_export(const file_format_t *format, const image_t *image,
         }
     }
     palette = calloc(256, sizeof(*palette));
+    if (!palette) return -1;
     if (use_current_palette) {
         LOG_I("Using the current palette");
         for (i = 0; i < 256; i++) {
@@ -438,44 +513,47 @@ static int kvx_export(const file_format_t *format, const image_t *image,
 
     // Compute xoffsets and xyoffsetx.
     // Can we do it in a simpler way?
-    xoffsets = calloc(size[0] + 1, sizeof(*xoffsets));
-    xyoffsets = calloc(size[0] * (size[1] + 1), sizeof(*xyoffsets));
-    ofs = (size[0] + 1) * 4 + size[0] * (size[1] + 1) * 2;
+    xoffsets = calloc((size_t)size[0] + 1, sizeof(*xoffsets));
+    xyoffsets = calloc(xy_count, sizeof(*xyoffsets));
+    if (!xoffsets || !xyoffsets) raise("Cannot allocate KVX offsets");
+    ofs = header_size;
     xoffsets[0] = ofs;
 
-    ofs = (size[0] + 1) * 4 + size[0] * (size[1] + 1) * 2;
     slab = (void*)utarray_front(slabs);
     for (x = 0; x < size[0]; x++) {
         while (slab && slab->pos[0] <= x) {
+            if (ofs > UINT32_MAX - 24 - (3 + slab->len))
+                raise("KVX voxel data too large");
             ofs += 3 + slab->len;
             slab = (void*)utarray_next(slabs, slab);
         }
         xoffsets[x + 1] = ofs;
     }
 
-    ofs = (size[0] + 1) * 4 + size[0] * (size[1] + 1) * 2;
+    ofs = header_size;
     slab = (void*)utarray_front(slabs);
     for (x = 0; x < size[0]; x++) {
-        xyoffsets[x * (size[1] + 1)] = 0;
+        xyoffsets[(size_t)x * (size[1] + 1)] = 0;
         for (y = 0; y < size[1]; y++) {
             while (slab && slab->pos[0] <= x && slab->pos[1] <= y) {
                 ofs += 3 + slab->len;
                 slab = (void*)utarray_next(slabs, slab);
             }
-            xyoffsets[x * (size[1] + 1) + y + 1] = ofs - xoffsets[x];
+            if (ofs - xoffsets[x] > UINT16_MAX)
+                raise("KVX column offsets too large");
+            xyoffsets[(size_t)x * (size[1] + 1) + y + 1] =
+                ofs - xoffsets[x];
         }
     }
 
     // Now we have all the data ready to be saved.
     // The byte size is the last x offset plus the header size (24).
+    file = fopen(path, "wb");
+    if (!file) raise("Cannot open KVX file");
     WRITE(uint32_t, xoffsets[size[0]] + 24, file);
     WRITE(uint32_t, size[0], file);
     WRITE(uint32_t, size[1], file);
     WRITE(uint32_t, size[2], file);
-
-    pivot[0] = -orig[0] + (size[0] % 2) / 2.;
-    pivot[1] = -orig[1] + (size[1] % 2) / 2.;
-    pivot[2] = size[2] - orig[2];
 
     WRITE(int32_t, (int)(pivot[0] * 256), file);
     WRITE(int32_t, (int)(pivot[1] * 256), file);
@@ -483,7 +561,7 @@ static int kvx_export(const file_format_t *format, const image_t *image,
 
     for (i = 0; i < size[0] + 1; i++)
         WRITE(uint32_t, xoffsets[i], file);
-    for (i = 0; i < size[0] * (size[1] + 1); i++)
+    for (i = 0; (size_t)i < xy_count; i++)
         WRITE(uint16_t, xyoffsets[i], file);
 
     for (slab = (void*)utarray_front(slabs); slab;
@@ -495,7 +573,8 @@ static int kvx_export(const file_format_t *format, const image_t *image,
         WRITE(uint8_t, slab->pos[2], file);
         WRITE(uint8_t, slab->len, file);
         WRITE(uint8_t, slab->vis, file);
-        fwrite(slab->colors, 1, slab->len, file);
+        if (fwrite(slab->colors, 1, slab->len, file) != slab->len)
+            raise("Write KVX slab error");
     }
 
     for (i = 0; i < 256; i++) {
@@ -504,13 +583,15 @@ static int kvx_export(const file_format_t *format, const image_t *image,
         WRITE(uint8_t, palette[i][2] / 4, file);
     }
 
-    utarray_free(slabs);
-    utarray_free(voxels);
+end:
+    if (slabs) utarray_free(slabs);
+    if (voxels) utarray_free(voxels);
     free(xoffsets);
     free(xyoffsets);
     free(palette);
-    fclose(file);
-    return 0;
+    if (file && fclose(file) != 0) ret = -1;
+    if (ret && file) sys_delete_file(path);
+    return ret;
 }
 
 FILE_FORMAT_REGISTER(kv6,

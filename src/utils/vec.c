@@ -157,9 +157,9 @@ void eul_to_quat(const float e[3], int order, float q[4])
     double a[3];
     double ti, tj, th, ci, cj, ch, si, sj, sh, cc, cs, sc, ss;
 
-    ti = e[i] * 0.5f;
-    tj = e[j] * (parity ? -0.5f : 0.5f);
-    th = e[k] * 0.5f;
+    ti = e[i] * 0.5;
+    tj = e[j] * (parity ? -0.5 : 0.5);
+    th = e[k] * 0.5;
     ci = cos(ti);
     cj = cos(tj);
     ch = cos(th);
