@@ -158,6 +158,7 @@ void vx_point_cloud_free(vx_point_cloud_t* pointcloud);
 
 #ifdef VOXELIZER_IMPLEMENTATION
 
+#include <limits.h>
 #include <math.h>       // ceil, fabs & al.
 #include <stdbool.h>    // hughh
 #include <string.h>     // memcpy
@@ -977,12 +978,29 @@ unsigned int* vx_voxelize_snap_3dgrid(vx_mesh_t const* m,
     vx_aabb_t* aabb = NULL;
     vx_aabb_t* meshaabb = NULL;
     float ax, ay, az;
+    unsigned int voxel_count;
+
+    if (!m || !m->vertices || !m->indices || !m->colors ||
+        m->nindices < 3 || m->nindices % 3 || !width || !height || !depth ||
+        width > INT_MAX || height > INT_MAX || depth > INT_MAX ||
+        width > UINT_MAX / height || width * height > UINT_MAX / depth)
+        return NULL;
+    voxel_count = width * height * depth;
+    if (voxel_count > UINT_MAX / sizeof(unsigned int))
+        return NULL;
 
     VX_ASSERT(m->colors);
 
     for (size_t i = 0; i < m->nindices; i += 3) {
         vx_triangle_t triangle;
         unsigned int i1, i2, i3;
+
+        if (m->indices[i] >= m->nvertices ||
+            m->indices[i+1] >= m->nvertices ||
+            m->indices[i+2] >= m->nvertices) {
+            VX_FREE(meshaabb);
+            return NULL;
+        }
 
         VX_ASSERT(m->indices[i+0] < m->nvertices);
         VX_ASSERT(m->indices[i+1] < m->nvertices);
@@ -998,6 +1016,7 @@ unsigned int* vx_voxelize_snap_3dgrid(vx_mesh_t const* m,
 
         if (!meshaabb) {
             meshaabb = VX_MALLOC(vx_aabb_t, 1);
+            if (!meshaabb) return NULL;
             *meshaabb = vx__triangle_aabb(&triangle);
         } else {
             vx_aabb_t naabb = vx__triangle_aabb(&triangle);
@@ -1010,8 +1029,17 @@ unsigned int* vx_voxelize_snap_3dgrid(vx_mesh_t const* m,
     float resz = (meshaabb->max.z - meshaabb->min.z) / depth;
 
     vx_point_cloud_t* pc = vx_voxelize_pc(m, resx, resy, resz, 0.0);
+    if (!pc) {
+        VX_FREE(meshaabb);
+        return NULL;
+    }
 
     aabb = VX_MALLOC(vx_aabb_t, 1);
+    if (!aabb) {
+        VX_FREE(meshaabb);
+        vx_point_cloud_free(pc);
+        return NULL;
+    }
 
     vx__aabb_init(aabb);
 
@@ -1026,7 +1054,13 @@ unsigned int* vx_voxelize_snap_3dgrid(vx_mesh_t const* m,
     ay = aabb->max.y - aabb->min.y;
     az = aabb->max.z - aabb->min.z;
 
-    unsigned int* data = VX_CALLOC(unsigned int, width * height * depth);
+    unsigned int* data = VX_CALLOC(unsigned int, voxel_count);
+    if (!data) {
+        VX_FREE(aabb);
+        VX_FREE(meshaabb);
+        vx_point_cloud_free(pc);
+        return NULL;
+    }
 
     for (size_t i = 0; i < pc->nvertices; ++i) {
         float rgba[4] = {pc->colors[i].r, pc->colors[i].g, pc->colors[i].b, 1.0};
