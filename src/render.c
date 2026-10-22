@@ -382,6 +382,9 @@ static render_item_t *get_item_for_tile(
     const int effects_mask = EFFECT_MARCHING_CUBES | EFFECT_MC_SMOOTH;
     uint64_t tile_data_id;
     int p[3], i, x, y, z;
+    size_t vertex_bytes;
+    const size_t vertex_capacity =
+        (size_t)TILE_SIZE * TILE_SIZE * TILE_SIZE * 6 * 4;
     tile_item_key_t key = {};
 
     memset(&key, 0, sizeof(key)); // Just to be sure!
@@ -402,13 +405,17 @@ static render_item_t *get_item_for_tile(
     if (item) return item;
 
     item = calloc(1, sizeof(*item));
+    if (!item) return NULL;
     item->key = key;
     GL(glGenBuffers(1, &item->vertex_buffer));
     GL(glBindBuffer(GL_ARRAY_BUFFER, item->vertex_buffer));
     if (!g_vertices_buffer)
-        g_vertices_buffer = calloc(
-                TILE_SIZE * TILE_SIZE * TILE_SIZE * 6 * 4,
-                sizeof(*g_vertices_buffer));
+        g_vertices_buffer = calloc(vertex_capacity,
+                                   sizeof(*g_vertices_buffer));
+    if (!g_vertices_buffer) {
+        item_delete(item);
+        return NULL;
+    }
     item->nb_elements = volume_generate_vertices(
             volume, tile_pos, effects, g_vertices_buffer,
             &item->size, &item->subdivide);
@@ -416,14 +423,22 @@ static render_item_t *get_item_for_tile(
         LOG_W("Too many quads!");
         item->nb_elements = BATCH_QUAD_COUNT;
     }
+    if (item->nb_elements < 0 || item->size < 0 ||
+        (item->nb_elements && item->size != 3 && item->size != 4) ||
+        (item->size &&
+         (size_t)item->nb_elements > vertex_capacity / item->size)) {
+        item_delete(item);
+        return NULL;
+    }
+    vertex_bytes = (size_t)item->nb_elements * item->size *
+                   sizeof(*g_vertices_buffer);
     if (item->nb_elements != 0) {
         GL(glBufferData(GL_ARRAY_BUFFER,
-                item->nb_elements * item->size * sizeof(*g_vertices_buffer),
+                vertex_bytes,
                 g_vertices_buffer, GL_STATIC_DRAW));
     }
 
-    cache_add(g_items_cache, &key, sizeof(key), item,
-              item->nb_elements * item->size * sizeof(*g_vertices_buffer),
+    cache_add(g_items_cache, &key, sizeof(key), item, vertex_bytes,
               item_delete);
     return item;
 }
@@ -443,6 +458,7 @@ static void render_tile_(renderer_t *rend, volume_t *volume,
 
     item = get_item_for_tile(volume, iter, tile_pos, effects,
                               rend->settings.smoothness);
+    if (!item) return;
     if (item->nb_elements == 0) return;
     GL(glBindBuffer(GL_ARRAY_BUFFER, item->vertex_buffer));
     if (gl_has_uniform(shader, "u_tile_id")) {
@@ -837,12 +853,17 @@ void render_img2(renderer_t *rend,
     // Experimental for the moment!
     // Same as render_img, but we flip the texture!
     render_item_t *item = calloc(1, sizeof(*item));
+    if (!item) return;
     item->type = ITEM_MODEL3D;
     mat ? mat4_copy(mat, item->mat) : mat4_set_identity(item->mat);
     mat4_iscale(item->mat, 1, -1, 1);
     item->proj_screen = effects & EFFECT_PROJ_SCREEN;
     item->tex = texture_new_from_buf(data, w, h, bpp,
             (effects & EFFECT_ANTIALIASING) ? 0 : TF_NEAREST);
+    if (!item->tex) {
+        free(item);
+        return;
+    }
     item->model3d = g_rect_model;
     copy_color(NULL, item->color);
     item->effects = effects;

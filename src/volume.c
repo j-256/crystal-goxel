@@ -737,6 +737,10 @@ void volume_read(const volume_t *volume,
                const int pos[3], const int size[3],
                uint8_t *data)
 {
+    if (size[0] != N + 2 || size[1] != N + 2 || size[2] != N + 2) {
+        LOG_E("Invalid volume read dimensions");
+        return;
+    }
     // For the moment we only support the case where we get the rectangle
     // of a tile plus a one voxel border around it!
     assert(pos[0] - (pos[0] & ~(int)(N - 1)) == N - 1);
@@ -752,7 +756,7 @@ void volume_read(const volume_t *volume,
     uint8_t v[4];
     volume_accessor_t accessor;
 
-    memset(data, 0, size[0] * size[1] * size[2] * 4);
+    memset(data, 0, (size_t)(N + 2) * (N + 2) * (N + 2) * 4);
     tile = volume_get_tile_at(volume, tile_pos, NULL);
     if (!tile) goto rest;
 

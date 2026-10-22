@@ -18,20 +18,29 @@
 
 #include "goxel.h"
 #include "file_format.h"
+#include <limits.h>
 
 // XXX: this function has to be rewritten.
 static int png_export(const image_t *img, const char *path, int w, int h)
 {
+    int maxsize;
+    uint8_t *buf;
+    int bpp = img->export_transparent_background ? 4 : 3;
+
+    if (!path || w <= 0 || h <= 0) return -1;
     if (!goxel.graphics_initialized) {
         goxel_create_graphics();
     }
-
-    uint8_t *buf;
-    int bpp = img->export_transparent_background ? 4 : 3;
-    if (!path) return -1;
+    GL(glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxsize));
+    if (w > maxsize / 2 || h > maxsize / 2 ||
+        (size_t)w > INT_MAX / (4 * bpp) / (size_t)h) return -1;
     LOG_I("Exporting to file %s", path);
-    buf = calloc(w * h, bpp);
-    goxel_render_to_buf(buf, w, h, bpp);
+    buf = calloc((size_t)w * h, bpp);
+    if (!buf) return -1;
+    if (!goxel_render_to_buf(buf, w, h, bpp)) {
+        free(buf);
+        return -1;
+    }
     img_write(buf, w, h, bpp, path);
     free(buf);
     return 0;
@@ -69,8 +78,7 @@ static void export_gui(file_format_t *format)
 static int export_as_png(const file_format_t *format, const image_t *img,
                          const char *path)
 {
-    png_export(img, path, img->export_width, img->export_height);
-    return 0;
+    return png_export(img, path, img->export_width, img->export_height);
 }
 
 FILE_FORMAT_REGISTER(png,

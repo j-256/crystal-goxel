@@ -18,6 +18,7 @@
 
 #include "goxel.h"
 #include "file_format.h"
+#include <limits.h>
 
 static int export_as_png_slices(const file_format_t *format,
                                 const image_t *image, const char *path)
@@ -25,20 +26,37 @@ static int export_as_png_slices(const file_format_t *format,
     float box[4][4];
     const volume_t *volume;
     int x, y, z, w, h, d, pos[3], start_pos[3];
+    double dimensions[3], origin[3];
+    size_t stride, pixel_count, pixel_index;
     uint8_t c[4];
     uint8_t *img;
     volume_iterator_t iter = {0};
 
     volume = goxel_get_layers_volume(image);
+    if (!path) return -1;
     mat4_copy(image->box, box);
     if (box_is_null(box)) volume_get_box(volume, true, box);
-    w = box[0][0] * 2;
-    h = box[1][1] * 2;
-    d = box[2][2] * 2;
-    start_pos[0] = box[3][0] - box[0][0];
-    start_pos[1] = box[3][1] - box[1][1];
-    start_pos[2] = box[3][2] - box[2][2];
-    img = calloc(w * h * d, 4);
+    dimensions[0] = (double)box[0][0] * 2;
+    dimensions[1] = (double)box[1][1] * 2;
+    dimensions[2] = (double)box[2][2] * 2;
+    origin[0] = (double)box[3][0] - box[0][0];
+    origin[1] = (double)box[3][1] - box[1][1];
+    origin[2] = (double)box[3][2] - box[2][2];
+    for (x = 0; x < 3; x++) {
+        if (!(dimensions[x] >= 1 && dimensions[x] <= INT_MAX &&
+              origin[x] >= INT_MIN &&
+              origin[x] <= INT_MAX - dimensions[x] + 1)) return -1;
+        start_pos[x] = origin[x];
+    }
+    w = dimensions[0];
+    h = dimensions[1];
+    d = dimensions[2];
+    if ((size_t)w > INT_MAX / (size_t)d) return -1;
+    stride = (size_t)w * d;
+    if (stride > INT_MAX / 4 / (size_t)h) return -1;
+    pixel_count = stride * h;
+    img = calloc(pixel_count, 4);
+    if (!img) return -1;
     for (z = 0; z < d; z++)
     for (y = 0; y < h; y++)
     for (x = 0; x < w; x++) {
@@ -46,12 +64,10 @@ static int export_as_png_slices(const file_format_t *format,
         pos[1] = y + start_pos[1];
         pos[2] = z + start_pos[2];
         volume_get_at(volume, &iter, pos, c);
-        img[(y * w * d + z * w + x) * 4 + 0] = c[0];
-        img[(y * w * d + z * w + x) * 4 + 1] = c[1];
-        img[(y * w * d + z * w + x) * 4 + 2] = c[2];
-        img[(y * w * d + z * w + x) * 4 + 3] = c[3];
+        pixel_index = (size_t)y * stride + (size_t)z * w + x;
+        memcpy(img + pixel_index * 4, c, 4);
     }
-    img_write(img, w * d, h, 4, path);
+    img_write(img, (int)stride, h, 4, path);
     free(img);
     return 0;
 }

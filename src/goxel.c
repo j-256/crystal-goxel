@@ -27,6 +27,7 @@
 #include "../ext_src/stb/stb_ds.h"
 
 #include <errno.h> // IWYU pragma: keep.
+#include <limits.h>
 #include <stdarg.h>
 
 // The global goxel instance.
@@ -47,9 +48,10 @@ texture_t *texture_new_image(const char *path, int flags)
         data = read_file(path, &size);
         need_to_free = true;
     }
+    if (!data) return NULL;
     img = img_read_from_mem(data, size, &w, &h, &bpp);
-    tex = texture_new_from_buf(img, w, h, bpp, flags);
-    tex->path = strdup(path);
+    tex = img ? texture_new_from_buf(img, w, h, bpp, flags) : NULL;
+    if (tex) tex->path = strdup(path);
     free(img);
     if (need_to_free) free(data);
     return tex;
@@ -1031,14 +1033,21 @@ static void render_pathtrace_view(const float viewport[4])
 {
     pathtracer_t *pt = &goxel.pathtracer;
     float a, mat[4][4];
+    int w = goxel.image->export_width;
+    int h = goxel.image->export_height;
+    uint8_t *buf;
+
+    if (w <= 0 || h <= 0 || (size_t)w > INT_MAX / 4 / (size_t)h)
+        return;
     // Recreate the buffer if needed.
     if (    !pt->buf ||
-            pt->w != goxel.image->export_width ||
-            pt->h != goxel.image->export_height) {
+            pt->w != w || pt->h != h) {
+        buf = calloc((size_t)w * h, 4);
+        if (!buf) return;
         free(pt->buf);
-        pt->w = goxel.image->export_width;
-        pt->h = goxel.image->export_height;
-        pt->buf = calloc(pt->w * pt->h, 4);
+        pt->w = w;
+        pt->h = h;
+        pt->buf = buf;
         texture_delete(pt->texture);
         pt->texture = texture_new_surface(pt->w, pt->h, 0);
     }
@@ -1050,7 +1059,8 @@ static void render_pathtrace_view(const float viewport[4])
     mat4_iscale(mat, viewport[2], viewport[3], 1);
     mat4_itranslate(mat, 0.5, 0.5, 0);
     mat4_iscale(mat, min(a, 1.f), min(1.f / a, 1.f), 1);
-    texture_set_data(pt->texture, pt->buf, pt->w, pt->h, 4);
+    if (!texture_set_data(pt->texture, pt->buf, pt->w, pt->h, 4))
+        return;
     render_img(&goxel.rend, pt->texture, mat,
                EFFECT_NO_SHADING | EFFECT_PROJ_SCREEN | EFFECT_ANTIALIASING);
     render_submit(&goxel.rend, viewport, goxel.back_color);
@@ -1317,21 +1327,35 @@ const layer_t *goxel_get_render_layers(bool with_tool_preview)
     return goxel.render_layers;
 }
 
-// Render the view into an RGB[A] buffer.
-void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
+// Render the view into an RGB[A] buffer, returning false on invalid dimensions or allocation failure
+bool goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
 {
-    camera_t *camera = get_camera();
+    camera_t *camera;
     const volume_t *volume;
     texture_t *fbo;
-    renderer_t rend = goxel.rend;
-    float rect[4] = {0, 0, w * 2, h * 2};
+    renderer_t rend;
+    float rect[4];
     uint8_t *tmp_buf;
 
+    if (!buf || w <= 0 || h <= 0 || w > INT_MAX / 2 || h > INT_MAX / 2 ||
+        (bpp != 3 && bpp != 4) ||
+        (size_t)w > INT_MAX / (4 * bpp) / (size_t)h) return false;
+    tmp_buf = calloc((size_t)w * h * 4, bpp);
+    if (!tmp_buf) return false;
+    camera = get_camera();
+    rend = goxel.rend;
+    rect[0] = rect[1] = 0;
+    rect[2] = w * 2;
+    rect[3] = h * 2;
     camera->aspect = (float)w / h;
     camera_update(camera);
 
     volume = goxel_get_layers_volume(goxel.image);
     fbo = texture_new_buffer(w * 2, h * 2, TF_DEPTH);
+    if (!fbo) {
+        free(tmp_buf);
+        return false;
+    }
 
     mat4_copy(camera->view_mat, rend.view_mat);
     mat4_copy(camera->proj_mat, rend.proj_mat);
@@ -1343,11 +1367,15 @@ void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
     if (crystal_active()) crystal_render(&rend, false);
     else render_volume(&rend, volume, NULL, 0);
     render_submit(&rend, rect, (bpp == 3) ? goxel.back_color : NULL);
-    tmp_buf = calloc(w * h * 4, bpp);
-    texture_get_data(fbo, w * 2, h * 2, bpp, tmp_buf);
+    if (!texture_get_data(fbo, w * 2, h * 2, bpp, tmp_buf)) {
+        free(tmp_buf);
+        texture_delete(fbo);
+        return false;
+    }
     img_downsample(tmp_buf, w * 2, h * 2, bpp, buf);
     free(tmp_buf);
     texture_delete(fbo);
+    return true;
 }
 
 void goxel_add_hint(int flags, const char *title, const char *msg)

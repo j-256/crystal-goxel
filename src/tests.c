@@ -17,8 +17,10 @@
  */
 
 #include "goxel.h"
+#include "file_format.h"
 
 #include "utils/b64.h"
+#include <limits.h>
 
 #define TEST(cond) \
     do { \
@@ -129,9 +131,291 @@ static void test_load_corrupt(void)
     sys_delete_file("/tmp/goxel_test.gox");
 }
 
+static void test_old_vox_dimensions(void)
+{
+    const char *path = "/tmp/goxel_test.vox";
+    const uint32_t dimensions[][3] = {
+        {2, 2, UINT32_MAX},
+        {2, 2, INT_MAX},
+        {2, 2, 0},
+    };
+    FILE *file;
+    int i;
+
+    if (DEFINED(WIN32)) return;
+    for (i = 0; i < ARRAY_SIZE(dimensions); i++) {
+        file = fopen(path, "wb");
+        TEST(file != NULL);
+        TEST(fwrite(dimensions[i], sizeof(dimensions[i]), 1, file) == 1);
+        TEST(fclose(file) == 0);
+        TEST(goxel_import_file(path, NULL) != 0);
+    }
+    sys_delete_file(path);
+}
+
+static void test_png_export_dimensions(void)
+{
+    const file_format_t *format = file_format_get(NULL, "png", "w");
+    int width = goxel.image->export_width;
+    int height = goxel.image->export_height;
+
+    TEST(format != NULL);
+    goxel.image->export_width = INT_MAX;
+    goxel.image->export_height = 2;
+    TEST(format->export_func(format, goxel.image,
+                             "/tmp/goxel_test_invalid.png") != 0);
+    goxel.image->export_width = 0;
+    TEST(format->export_func(format, goxel.image,
+                             "/tmp/goxel_test_invalid.png") != 0);
+    goxel.image->export_width = width;
+    goxel.image->export_height = height;
+}
+
+static void write_qbcl_fixture(const char *path, const uint32_t dimensions[3],
+                               const uint8_t *compressed, size_t compressed_size)
+{
+    const uint32_t versions[2] = {1, 1};
+    const uint32_t thumbnail[2] = {0, 0};
+    const uint32_t metadata[7] = {0};
+    const uint8_t padding[16] = {0};
+    const uint32_t node_type = 0;
+    const uint32_t name_size = 1;
+    const int32_t position[3] = {0};
+    const float pivot[3] = {0};
+    const uint32_t data_size = compressed_size;
+    FILE *file = fopen(path, "wb");
+
+    TEST(file != NULL);
+    TEST(fwrite("QBCL", 4, 1, file) == 1);
+    TEST(fwrite(versions, sizeof(versions), 1, file) == 1);
+    TEST(fwrite(thumbnail, sizeof(thumbnail), 1, file) == 1);
+    TEST(fwrite(metadata, sizeof(metadata), 1, file) == 1);
+    TEST(fwrite(padding, sizeof(padding), 1, file) == 1);
+    TEST(fwrite(&node_type, sizeof(node_type), 1, file) == 1);
+    TEST(fwrite(padding, 4, 1, file) == 1);
+    TEST(fwrite(&name_size, sizeof(name_size), 1, file) == 1);
+    TEST(fwrite("L", 1, 1, file) == 1);
+    TEST(fwrite(padding, 3, 1, file) == 1);
+    TEST(fwrite(dimensions, sizeof(uint32_t), 3, file) == 3);
+    TEST(fwrite(position, sizeof(position), 1, file) == 1);
+    TEST(fwrite(pivot, sizeof(pivot), 1, file) == 1);
+    TEST(fwrite(&data_size, sizeof(data_size), 1, file) == 1);
+    TEST(fwrite(compressed, compressed_size, 1, file) == 1);
+    TEST(fclose(file) == 0);
+}
+
+static void test_qbcl_matrix_bounds(void)
+{
+    const char *path = "/tmp/goxel_test.qbcl";
+    const uint32_t versions[2] = {1, 1};
+    const uint32_t oversized_thumbnail[2] = {UINT32_MAX, UINT32_MAX};
+    const uint32_t valid_dimensions[3] = {1, 1, 1};
+    const uint32_t oversized_dimensions[3] = {INT_MAX, 2, 2};
+    const uint8_t valid_data[] = {
+        0x78, 0x9c, 0x63, 0x64, 0xf8, 0xcf, 0xc0,
+        0xf0, 0x1f, 0x00, 0x05, 0x07, 0x02, 0x00,
+    };
+    const uint8_t truncated_command[] = {
+        0x78, 0x9c, 0x63, 0x64, 0xf8, 0xcf,
+        0x00, 0x00, 0x02, 0x06, 0x01, 0x01,
+    };
+    int position[3] = {0};
+    uint8_t color[4];
+    volume_iterator_t iter = {0};
+    FILE *file;
+
+    if (DEFINED(WIN32)) return;
+    write_qbcl_fixture(path, valid_dimensions, valid_data, sizeof(valid_data));
+    TEST(goxel_import_file(path, NULL) == 0);
+    volume_get_at(goxel.image->active_layer->volume, &iter, position, color);
+    TEST(color[0] == 255 && color[3] == 255);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+
+    write_qbcl_fixture(path, oversized_dimensions, valid_data,
+                       sizeof(valid_data));
+    TEST(goxel_import_file(path, NULL) != 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+
+    write_qbcl_fixture(path, valid_dimensions, truncated_command,
+                       sizeof(truncated_command));
+    TEST(goxel_import_file(path, NULL) != 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+
+    file = fopen(path, "wb");
+    TEST(file != NULL);
+    TEST(fwrite("QBCL", 4, 1, file) == 1);
+    TEST(fwrite(versions, sizeof(versions), 1, file) == 1);
+    TEST(fwrite(oversized_thumbnail, sizeof(oversized_thumbnail), 1,
+                file) == 1);
+    TEST(fclose(file) == 0);
+    TEST(goxel_import_file(path, NULL) != 0);
+    sys_delete_file(path);
+}
+
+static void test_kv6_bounds(void)
+{
+    const char *path = "/tmp/goxel_test.kv6";
+    uint32_t dimensions[3] = {1, 1, 1};
+    const float pivot[3] = {0};
+    const uint32_t block_count = 1;
+    const uint32_t color = 0xffff0000;
+    const uint32_t xoffset = 0;
+    uint16_t xyoffset = 1;
+    const uint16_t z = 0;
+    const uint8_t flags[2] = {0};
+    FILE *file;
+    int i;
+
+    if (DEFINED(WIN32)) return;
+    for (i = 0; i < 3; i++) {
+        file = fopen(path, "wb");
+        TEST(file != NULL);
+        TEST(fwrite("Kvxl", 4, 1, file) == 1);
+        TEST(fwrite(dimensions, sizeof(dimensions), 1, file) == 1);
+        if (i != 1) {
+            TEST(fwrite(pivot, sizeof(pivot), 1, file) == 1);
+            TEST(fwrite(&block_count, sizeof(block_count), 1, file) == 1);
+            TEST(fwrite(&color, sizeof(color), 1, file) == 1);
+            TEST(fwrite(&z, sizeof(z), 1, file) == 1);
+            TEST(fwrite(flags, sizeof(flags), 1, file) == 1);
+            TEST(fwrite(&xoffset, sizeof(xoffset), 1, file) == 1);
+            TEST(fwrite(&xyoffset, sizeof(xyoffset), 1, file) == 1);
+        }
+        TEST(fclose(file) == 0);
+        TEST((goxel_import_file(path, NULL) == 0) == (i == 0));
+        image_delete(goxel.image);
+        goxel.image = image_new();
+        dimensions[0] = i == 0 ? UINT32_MAX : 1;
+        xyoffset = 2;
+    }
+    sys_delete_file(path);
+}
+
+static void test_kvx_bounds(void)
+{
+    const char *path = "/tmp/goxel_test.kvx";
+    uint32_t header[7] = {40, 1, 1, 1, 0, 0, 0};
+    const uint32_t xoffsets[2] = {12, 16};
+    const uint16_t xyoffsets[2] = {0, 4};
+    uint8_t slab[4] = {0, 1, 0, 1};
+    uint8_t palette[256 * 3] = {0};
+    FILE *file;
+    int i;
+
+    if (DEFINED(WIN32)) return;
+    palette[3] = 63;
+    for (i = 0; i < 3; i++) {
+        file = fopen(path, "wb");
+        TEST(file != NULL);
+        TEST(fwrite(header, sizeof(header), 1, file) == 1);
+        if (i != 1) {
+            TEST(fwrite(xoffsets, sizeof(xoffsets), 1, file) == 1);
+            TEST(fwrite(xyoffsets, sizeof(xyoffsets), 1, file) == 1);
+            TEST(fwrite(slab, sizeof(slab), 1, file) == 1);
+            TEST(fwrite(palette, sizeof(palette), 1, file) == 1);
+        }
+        TEST(fclose(file) == 0);
+        TEST((goxel_import_file(path, NULL) == 0) == (i == 0));
+        image_delete(goxel.image);
+        goxel.image = image_new();
+        header[1] = i == 0 ? UINT32_MAX : 1;
+        slab[1] = 0;
+    }
+    sys_delete_file(path);
+}
+
+static void test_kvx_export_bounds(void)
+{
+    const char *path = "/tmp/goxel_test_export.kvx";
+    const file_format_t *format = file_format_get(NULL, "kvx", "w");
+    const int aabb[2][3] = {{0, 0, 0}, {1, 1, 1}};
+    const int pos[3] = {0};
+    const uint8_t color[4] = {255, 0, 0, 255};
+    float box[4][4];
+    uint32_t header[4];
+    FILE *file;
+
+    if (DEFINED(WIN32)) return;
+    TEST(format != NULL);
+    mat4_copy(goxel.image->box, box);
+    volume_set_at(goxel.image->active_layer->volume, NULL, pos, color);
+    bbox_from_aabb(goxel.image->box, aabb);
+    TEST(format->export_func(format, goxel.image, path) == 0);
+    file = fopen(path, "rb");
+    TEST(file != NULL);
+    TEST(fread(header, sizeof(header), 1, file) == 1);
+    TEST(fclose(file) == 0);
+    TEST(header[1] == 1 && header[2] == 1 && header[3] == 1);
+
+    goxel.image->box[0][0] = INFINITY;
+    TEST(format->export_func(format, goxel.image, path) != 0);
+    goxel.image->box[0][0] = (float)INT_MAX;
+    TEST(format->export_func(format, goxel.image, path) != 0);
+    goxel.image->box[0][0] = 0.5;
+    goxel.image->box[2][2] = 128.5;
+    TEST(format->export_func(format, goxel.image, path) != 0);
+    mat4_copy(box, goxel.image->box);
+    file = fopen(path, "rb");
+    TEST(file != NULL);
+    TEST(fread(header, sizeof(header), 1, file) == 1);
+    TEST(fclose(file) == 0);
+    TEST(header[1] == 1 && header[2] == 1 && header[3] == 1);
+    TEST(goxel_import_file(path, NULL) == 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+    sys_delete_file(path);
+}
+
+static void test_texture_transfer_bounds(void)
+{
+    const uint8_t color[4] = {255, 0, 0, 255};
+    uint8_t pixel[4];
+    texture_t *tex = texture_new_from_buf(color, 1, 1, 4, 0);
+
+    TEST(tex != NULL);
+    TEST(!texture_set_data(tex, color, INT_MAX, 2, 4));
+    TEST(!texture_get_data(tex, INT_MAX, 2, 4, pixel));
+    TEST(texture_set_data(tex, color, 1, 1, 4));
+    texture_delete(tex);
+    TEST(goxel_render_to_buf(pixel, 1, 1, 4));
+}
+
+static void test_gltf_palette_export(void)
+{
+    const char *path = "/tmp/goxel_test_palette.gltf";
+    const file_format_t *format = file_format_get(NULL, "gltf", "w");
+    const int pos[3] = {0};
+    const uint8_t color[4] = {255, 0, 0, 255};
+    FILE *file;
+
+    if (DEFINED(WIN32)) return;
+    TEST(format != NULL);
+    volume_set_at(goxel.image->active_layer->volume, NULL, pos, color);
+    TEST(format->export_func(format, goxel.image, path) == 0);
+    file = fopen(path, "rb");
+    TEST(file != NULL);
+    TEST(fseek(file, 0, SEEK_END) == 0);
+    TEST(ftell(file) > 0);
+    TEST(fclose(file) == 0);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+    sys_delete_file(path);
+}
+
 void tests_run(void)
 {
     test_load_file_v2();
     test_load_file_v1_with_preview();
     test_load_corrupt();
+    test_old_vox_dimensions();
+    test_png_export_dimensions();
+    test_qbcl_matrix_bounds();
+    test_kv6_bounds();
+    test_kvx_bounds();
+    test_kvx_export_bounds();
+    test_texture_transfer_bounds();
+    test_gltf_palette_export();
 }

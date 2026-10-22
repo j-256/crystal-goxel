@@ -51,6 +51,8 @@ static int vox_import_old(const char *path)
 {
     FILE *file;
     int w, h, d, i;
+    size_t voxel_index;
+    uint32_t width, height, depth;
     uint8_t *voxels = NULL;
     uint8_t (*palette)[4] = NULL;
     uint8_t (*cube)[4] = NULL;
@@ -59,18 +61,24 @@ static int vox_import_old(const char *path)
 
     file = fopen(path, "rb");
     if (!file) return -1;
-    d = READ(uint32_t, file);
-    h = READ(uint32_t, file);
-    w = READ(uint32_t, file);
-
-    size = w * h * d;
-    if (size * sizeof(*cube) >= SIZE_MAX / 4) goto error;
+    depth = READ(uint32_t, file);
+    height = READ(uint32_t, file);
+    width = READ(uint32_t, file);
+    if (!width || !height || !depth ||
+        width > INT_MAX || height > INT_MAX || depth > INT_MAX ||
+        width > INT_MAX / height ||
+        width * height > INT_MAX / depth) goto error;
+    w = (int)width;
+    h = (int)height;
+    d = (int)depth;
+    size = (size_t)w * h * d;
+    if (size > SIZE_MAX / sizeof(*cube)) goto error;
     voxels = calloc(size, 1);
     palette = calloc(256, sizeof(*palette));
     cube = calloc(size, sizeof(*cube));
-    if (!cube) goto error;
-    for (i = 0; i < w * h * d; i++) {
-        voxels[i] = READ(uint8_t, file);
+    if (!voxels || !palette || !cube) goto error;
+    for (voxel_index = 0; voxel_index < size; voxel_index++) {
+        voxels[voxel_index] = READ(uint8_t, file);
     }
     for (i = 0; i < 256; i++) {
         palette[i][0] = READ(uint8_t, file);
@@ -80,9 +88,9 @@ static int vox_import_old(const char *path)
     }
     memset(palette[255], 0, 4);
 
-    for (i = 0; i < w * h * d; i++) {
-        if (voxels[i] == 255) continue;
-        memcpy(cube[i], palette[voxels[i]], 4);
+    for (voxel_index = 0; voxel_index < size; voxel_index++) {
+        if (voxels[voxel_index] == 255) continue;
+        memcpy(cube[voxel_index], palette[voxels[voxel_index]], 4);
     }
 
     volume_blit(goxel.image->active_layer->volume, (uint8_t*)cube,
