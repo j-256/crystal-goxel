@@ -38,7 +38,7 @@ if ! dotnet --list-sdks | awk '/^10\./ {found=1} END {exit !found}'; then
 fi
 case "$(uname -m)" in
     arm64) runtime='osx-arm64' ;;
-    *) printf '%s\n' 'The preview Mac package requires an Apple Silicon build host' >&2; exit 2 ;;
+    *) printf '%s\n' 'The Mac package requires an Apple Silicon build host' >&2; exit 2 ;;
 esac
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_root"

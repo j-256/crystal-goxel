@@ -1,6 +1,6 @@
 # Prepare and publish Crystal Goxel
 
-The first preview can be built locally and uploaded to GitHub Releases without running Actions. Release downloads contain the editor, its self-contained helper, documentation and license notices. Source is released from the same committed revision; native game resources, authoring caches and helper debug symbols containing local source paths are excluded. Debug configurations retain symbols for development.
+Releases can be built locally and uploaded to GitHub Releases without running Actions. Release downloads contain the editor, its self-contained helper, documentation, and license notices. Source is released from the same committed revision; native game resources, authoring caches, and helper debug symbols containing local source paths are excluded. Debug configurations retain symbols for development.
 
 ## Actions and runner costs
 
@@ -58,5 +58,7 @@ Creating the hosted repository, pushing, changing visibility, publishing a relea
 ## Tagged releases
 
 Public main pushes, pull requests and manual dispatch build and check the supported packages. Pushing a `crystal-v*` tag also validates it against `CRYSTAL_VERSION` and assembles a draft release after both platform builds and release contract checks pass. The draft contains both platform ZIPs, matching source, checksums and notes. It does not automatically publish a release. Release creation has write permission only in the tag job; pull request builds retain read-only repository access.
+
+For a stable `X.Y.Z` release, publish the verified draft without the prerelease flag and select it as the latest release. Keep the documented Windows graphical testing and platform signing limitations visible in its release notes. A stable version does not certify an untested platform. Preview versions retain their prerelease classification and are not selected as latest.
 
 If the same draft tag already exists, the workflow stops rather than overwriting its assets. Inspect and resolve that release deliberately before retrying. A published release must not be replaced silently. The Windows GUI, minimum-version Mac runtime, signing and notarization remain separate validation or delivery steps. Update [release notes](RELEASE_NOTES.md) when that evidence changes.

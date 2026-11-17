@@ -79,6 +79,8 @@ def set_version(value):
                     "-p", "release_test.py"], cwd=ROOT, stdout=sys.stderr, check=True)
     if source() != before or git("branch", "--show-current") != branch:
         raise Precondition("Checkout changed during release checks; retry from clean source")
+    if git("tag", "--list", tag):
+        raise Precondition(f"Release tag already exists: {tag}")
     (ROOT / "CRYSTAL_VERSION").write_text(value + "\n")
 
 
@@ -288,7 +290,7 @@ def main():
         "Setting requires a clean attached checkout and an unused local release tag. "
         "Requires Python 3.11+, Git and PyYAML 6.0.3. Creates no commit or tag.")
     mode = value.add_mutually_exclusive_group()
-    mode.add_argument("--numeric", action="store_true")
+    value.add_argument("--numeric", action="store_true")
     mode.add_argument("--tag", help="require a tag matching CRYSTAL_VERSION")
     mode.add_argument("--set", dest="new_version", metavar="VERSION",
                       help="advance to X.Y.Z or X.Y.Z-preview.N after release checks")
@@ -305,6 +307,8 @@ def main():
     command = commands.add_parser("verify", help="check a prepared release and every checksum")
     command.add_argument("directory", type=Path)
     args = parser.parse_args()
+    if args.command == "version" and args.new_version is not None and args.numeric:
+        parser.error("--set cannot be combined with --numeric")
     if sys.version_info < (3, 11):
         print("Requires Python 3.11 or later", file=sys.stderr)
         return 3

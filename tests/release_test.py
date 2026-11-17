@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -73,6 +74,22 @@ class ReleaseContract(unittest.TestCase):
         with zipfile.ZipFile(output / release.package_name("macos-arm64")) as stream:
             mode = stream.getinfo("Crystal Goxel.app/Contents/MacOS/CrystalGoxel").external_attr >> 16
             self.assertTrue(mode & 0o111)
+
+    def test_stable_release_notes_keep_platform_limits(self):
+        (self.repo / "CRYSTAL_VERSION").write_text("0.1.0\n")
+        notes = (PROJECT / "doc/RELEASE_NOTES.md").read_text()
+        (self.repo / "doc/RELEASE_NOTES.md").write_text(notes)
+        self.git("add", "CRYSTAL_VERSION", "doc/RELEASE_NOTES.md")
+        self.commit()
+        self.archives()
+        output = self.base / "stable"
+        release.assemble(self.inputs, output, "crystal-v0.1.0")
+        rendered = (output / "release-notes.md").read_text()
+        self.assertEqual(rendered.splitlines()[0], "# Crystal Goxel 0.1.0")
+        self.assertIn("Windows graphical authoring", rendered)
+        self.assertIn("unverified", rendered)
+        self.assertIn("not notarized", rendered)
+        self.assertNotIn("@VERSION@", rendered)
 
     def test_dirty_build_and_later_revision_are_rejected(self):
         package = self.package("windows-x64")
@@ -178,6 +195,19 @@ class ReleaseContract(unittest.TestCase):
             release.set_version("0.1.0")
         self.assertEqual(release.version(), "0.1.0-preview.1")
 
+    def test_version_update_rechecks_tag_after_release_checks(self):
+        self.prepare_version_checks()
+        checks = self.repo / "tests/release_test.py"
+        checks.write_text("import subprocess\nimport unittest\n"
+                          "class ReleaseGate(unittest.TestCase):\n"
+                          "    def test_contract(self):\n"
+                          "        subprocess.run(['git', 'tag', 'crystal-v0.1.0'], check=True)\n")
+        self.git("add", "tests/release_test.py")
+        self.commit()
+        with self.assertRaisesRegex(release.Precondition, "tag"):
+            release.set_version("0.1.0")
+        self.assertEqual(release.version(), "0.1.0-preview.1")
+
     def test_version_update_orders_preview_and_stable_versions(self):
         self.prepare_version_checks()
         release.set_version("0.1.0-preview.2")
@@ -190,6 +220,17 @@ class ReleaseContract(unittest.TestCase):
             release.set_version("0.1.0-preview.3")
         release.set_version("0.1.1-preview.1")
         self.assertEqual(release.version(), "0.1.1-preview.1")
+
+
+class ReleaseCLI(unittest.TestCase):
+    def test_numeric_version_and_tag_remain_composable(self):
+        value = (PROJECT / "CRYSTAL_VERSION").read_text().strip()
+        result = subprocess.run([sys.executable, str(PROJECT / "scripts/crystal-release.py"),
+                                 "version", "--numeric", "--tag", f"crystal-v{value}"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), value.split("-", 1)[0])
+        self.assertEqual(result.stderr, "")
 
 
 class RunnerPolicy(unittest.TestCase):

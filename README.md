@@ -6,7 +6,7 @@ Construction exports as voxel NPC entities. Native terrain stays read-only: pain
 
 ## Get started
 
-Preview downloads are prepared as versioned Windows x64 and Apple Silicon Mac ZIPs with their own helper runtimes. Use the platform ZIP from this repository's GitHub Releases when a release is available; upstream Goxel downloads do not include the Crystal Project bridge. See [release preparation and publication](doc/RELEASING.md) for build provenance, checksums and the public-only CI policy. Windows graphical editing is experimental; Mac packages are ad hoc signed and not notarized.
+Download the Windows x64 or Apple Silicon Mac ZIP from [GitHub Releases](https://github.com/j-256/crystal-goxel/releases). Each package includes its own helper runtime; upstream Goxel downloads do not include the Crystal Project bridge. See [release preparation and publication](doc/RELEASING.md) for build provenance, checksums, and the public-only CI policy. Windows graphical editing remains unverified and experimental; Mac packages are ad hoc signed and not notarized.
 
 You need your own **Windows Crystal Project 1.6.9.0 installation**. Crystal Edit can open the exported JSON for review and further editing: `mod.json` is the Crystal Edit project itself, with no compilation step. The bridge checks the exact game resources; other versions and the native Mac game installation are not accepted. Game files are selected locally and are not bundled with this repository or the app.
 
