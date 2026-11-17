@@ -1652,10 +1652,19 @@ extern "C" void crystal_panel(void)
                        sizeof(installation_input));
         if (gui_button("Choose game folder", 0, 0)) {
             auto *path = sys_open_folder_dialog(
-                    "Select Windows game installation", nullptr);
+                    "Select Crystal Project game folder", nullptr);
             if (path) snprintf(installation_input, sizeof(installation_input),
                                "%s", path);
         }
+#ifdef __APPLE__
+        if (gui_button("Choose Mac app", 0, 0)) {
+            const char *filters[] = { "*.app", nullptr };
+            auto *path = sys_open_file_dialog("Choose Crystal Project.app",
+                    nullptr, filters, "Mac application");
+            if (path) snprintf(installation_input, sizeof(installation_input),
+                               "%s", path);
+        }
+#endif
         gui_input_text("New cache folder", cache_input, sizeof(cache_input));
         if (gui_button("Choose cache parent", 0, 0)) {
             auto *path = sys_open_folder_dialog(

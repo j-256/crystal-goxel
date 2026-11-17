@@ -8,7 +8,7 @@ Construction exports as voxel NPC entities. Native terrain stays read-only: pain
 
 Download the Windows x64 or Apple Silicon Mac ZIP from [GitHub Releases](https://github.com/j-256/crystal-goxel/releases). Each package includes its own helper runtime; upstream Goxel downloads do not include the Crystal Project bridge. See [release preparation and publication](doc/RELEASING.md) for build provenance, checksums, and the public-only CI policy. Windows graphical editing remains unverified and experimental; Mac packages are ad hoc signed and not notarized.
 
-You need your own **Windows Crystal Project 1.6.9.0 installation**. Crystal Edit can open the exported JSON for review and further editing: `mod.json` is the Crystal Edit project itself, with no compilation step. The bridge checks the exact game resources; other versions and the native Mac game installation are not accepted. Game files are selected locally and are not bundled with this repository or the app.
+You need your own **Crystal Project 1.7.0.1 installation for Windows or Mac**. Choose the Windows game folder or the Mac `Crystal Project.app` bundle; either supplies native resources to the editor. Crystal Edit can open the exported JSON for review and further editing: `mod.json` is the Crystal Edit project itself, with no compilation step. Game files are selected locally and are not bundled with this repository or the app. Windows 1.6.9.0 resources remain supported for older caches. After updating the game, create a new cache; an existing cache must retain its original source identity. Unknown game builds require a Crystal Goxel compatibility update.
 
 The Windows package targets x64 Windows 11 with an OpenGL-capable graphics driver. It includes its own helper runtime. The process launcher, packaged helper, synthetic checks and native world preparation have been exercised in a Windows 11 ARM64 VM running the x64 package under emulation. Windows graphical authoring, native file dialogs and Crystal Edit UI behavior remain unverified. The Windows CI job is configured to repeat the process and synthetic checks without game files; those checks do not open the graphical editor. The Mac desktop has been exercised on Apple Silicon. See the [detailed guide](CRYSTAL_BRIDGE.md#build-and-open) for packaging limits.
 
@@ -44,7 +44,7 @@ The Apple Silicon package targets macOS 15 or later and includes its own .NET ru
 ### Open your first world
 
 1. In the **Crystal Project** panel, expand **Create tiled world**
-2. Use **Choose game folder** to select the Windows game installation containing `Crystal Project.exe` and its `Content` folder
+2. Use **Choose game folder** to select the Windows game installation, or **Choose Mac app** on Mac to select `Crystal Project.app`. You can also enter either path in **Game installation**
 3. Use **Choose cache parent** outside the repository, then make sure **New cache folder** names a folder that does not exist yet
 4. Click **Create world cache** to open the generated `world.json` and load the starting area
 

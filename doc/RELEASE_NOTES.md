@@ -2,7 +2,11 @@
 
 Build voxel NPC constructions against native Crystal Project terrain, edit across tile boundaries and distant locations in one document, and export the combined work as a Crystal Edit project JSON. `mod.json` is the project itself; there is no Crystal Edit compilation step.
 
-Choose the platform ZIP, extract it completely, and keep the editor and bundled helper together. Both downloads include their own .NET runtime; neither needs a separate runtime installation. Use your own Windows Crystal Project 1.6.9.0 installation to prepare native reference content. Game assemblies, assets and caches are not included.
+Choose the platform ZIP, extract it completely, and keep the editor and bundled helper together. Both downloads include their own .NET runtime; neither needs a separate runtime installation. Use your own Windows or Mac Crystal Project 1.7.0.1 installation to prepare native reference content. Mac users can select `Crystal Project.app` directly. Windows 1.6.9.0 caches remain supported; create a new cache when changing game builds. Game assemblies, assets, and caches are not included.
+
+## Game compatibility
+
+Windows and Mac 1.7.0.1 resource sources have passed native authoring and original reader/construction checks on an Apple Silicon Mac. This release recognizes both source builds while preserving older cache fingerprints. These checks do not establish Windows application GUI compatibility or a complete in-game playtest.
 
 ## Fixes since 0.1.0-preview.1
 

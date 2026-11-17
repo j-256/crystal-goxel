@@ -74,10 +74,8 @@ internal sealed class TiledContext : IDisposable
 
     internal static void Validate(string path, JsonObject context)
     {
+        NativeBuilds.FromContext(context);
         if (!IsTiled(context) || context["tileSize"]?.GetValue<int>() != TileSize ||
-            context["executableSha256"]?.GetValue<string>() != NativeGame.ReviewedExecutable ||
-            context["worldSha256"]?.GetValue<string>() != NativeGame.ReviewedWorld ||
-            context["voxelSha256"]?.GetValue<string>() != NativeGame.ReviewedVoxels ||
             context["origin"]?.ToJsonString() != "[0,0,0]" ||
             string.IsNullOrWhiteSpace(context["installation"]?.GetValue<string>()))
             throw new InvalidDataException("Unsupported tiled world context");
@@ -101,8 +99,8 @@ internal sealed class TiledContext : IDisposable
             throw new ArgumentException("Output already exists; choose a new world cache directory");
         using var game = new NativeGame(installation);
         var world = new NativeWorld(Path.Combine(game.Installation, "Content", "Worlds", "field.dat"));
-        if (world.WorldHash != NativeGame.ReviewedWorld)
-            throw new InvalidDataException("Native world differs from the inspected installation");
+        if (world.WorldHash != game.Profile.WorldHash)
+            throw new InvalidDataException("Native world differs from the verified source build");
         var staging = Path.GetFullPath(output) + "." + Guid.NewGuid().ToString("N") + ".partial";
         Directory.CreateDirectory(staging);
         try
@@ -112,9 +110,9 @@ internal sealed class TiledContext : IDisposable
             var context = new
             {
                 format = Format, tileSize = TileSize, origin = DocumentOrigin,
-                gameVersion = "Windows 1.6.9.0", installation = game.Installation,
+                gameVersion = game.Profile.Label, installation = game.Installation,
                 executableSha256 = game.ExecutableHash, worldSha256 = world.WorldHash,
-                voxelSha256 = NativeGame.ReviewedVoxels, blocks, files
+                voxelSha256 = game.Profile.VoxelHash, blocks, files
             };
             File.WriteAllText(Path.Combine(staging, "world.json"), JsonSerializer.Serialize(context, Context.JsonOptions));
             NativeLocations.Create(game, world, Projects.Read(Path.Combine(staging, "world.json")), staging);
@@ -149,11 +147,18 @@ internal sealed class TiledContext : IDisposable
         if (Directory.Exists(destination)) return ReadTile(key);
         if (game is null)
         {
-            game = new NativeGame(manifest["installation"]!.GetValue<string>());
-            world = new NativeWorld(Path.Combine(game.Installation, "Content", "Worlds", "field.dat"));
-            if (world.WorldHash != NativeGame.ReviewedWorld ||
-                NativeGame.Hash(Context.Atlas(Path.Combine(game.Installation, "Content", "Textures", "Voxel.dat"))) != manifest["files"]!["atlas.png"]!.GetValue<string>())
-                throw new InvalidDataException("Installed native resources differ from the world context");
+            var candidate = new NativeGame(manifest["installation"]!.GetValue<string>());
+            try
+            {
+                NativeBuilds.RequireSame(manifest, candidate.Profile);
+                var candidateWorld = new NativeWorld(Path.Combine(candidate.Installation, "Content", "Worlds", "field.dat"));
+                if (candidateWorld.WorldHash != candidate.Profile.WorldHash ||
+                    NativeGame.Hash(Context.Atlas(Path.Combine(candidate.Installation, "Content", "Textures", "Voxel.dat"))) != manifest["files"]!["atlas.png"]!.GetValue<string>())
+                    throw new InvalidDataException("Installed native resources differ from the world context");
+                game = candidate;
+                world = candidateWorld;
+            }
+            catch { candidate.Dispose(); throw; }
         }
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         var staging = destination + "." + Guid.NewGuid().ToString("N") + ".partial";

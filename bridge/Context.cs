@@ -21,8 +21,8 @@ internal static class Context
         if (Directory.Exists(output) || File.Exists(output)) throw new ArgumentException("Output already exists; choose a new context directory");
         using var game = new NativeGame(installation);
         var world = new NativeWorld(Path.Combine(game.Installation, "Content", "Worlds", "field.dat"));
-        // The reviewed entity namespace is valid only for this exact native world
-        if (world.WorldHash != NativeGame.ReviewedWorld) throw new InvalidDataException("Native world differs from the inspected Windows 1.6.9.0 installation");
+        // Entity allocation is qualified against the world belonging to this source build
+        if (world.WorldHash != game.Profile.WorldHash) throw new InvalidDataException("Native world differs from the verified source build");
         var origin = center.Zip(size, (c, s) => c - s / 2).ToArray();
         var staging = Path.GetFullPath(output) + "." + Guid.NewGuid().ToString("N") + ".partial";
         Directory.CreateDirectory(staging);
@@ -34,7 +34,7 @@ internal static class Context
             var manifest = new
             {
                 format = 1,
-                gameVersion = "Windows 1.6.9.0",
+                gameVersion = game.Profile.Label,
                 executableSha256 = game.ExecutableHash,
                 worldSha256 = world.WorldHash,
                 voxelSha256 = NativeGame.Hash(File.ReadAllBytes(Path.Combine(game.Installation, "Content", "Database", "voxel.dat"))),

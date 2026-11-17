@@ -5,6 +5,7 @@
   Authors: Bernard Teo, Michael Labbe
  */
 
+// Crystal Goxel: recognize application bundles in app filters
 #include <AppKit/AppKit.h>
 #include <Availability.h>
 #include "nfd.h"
@@ -47,6 +48,14 @@ static void NFDi_Free(void* ptr) {
 }
 
 #if NFD_MACOS_ALLOWEDCONTENTTYPES == 1
+static UTType* TypeForExtension(NSString* extension) {
+    // Application bundles do not conform to the executable data type
+    // returned for the app extension
+    if ([extension caseInsensitiveCompare:@"app"] == NSOrderedSame)
+        return UTTypeApplicationBundle;
+    return [UTType typeWithFilenameExtension:extension conformingToType:UTTypeData];
+}
+
 // Returns an NSArray of UTType representing the content types.
 static NSArray* BuildAllowedContentTypes(const nfdnfilteritem_t* filterList,
                                          nfdfiltersize_t filterCount) {
@@ -64,8 +73,7 @@ static NSArray* BuildAllowedContentTypes(const nfdnfilteritem_t* filterList,
                     initWithBytes:(const void*)p_currentFilterBegin
                            length:(sizeof(nfdnchar_t) * (p_filterSpec - p_currentFilterBegin))
                          encoding:NSUTF8StringEncoding];
-                UTType* filterType = [UTType typeWithFilenameExtension:filterStr
-                                                      conformingToType:UTTypeData];
+                UTType* filterType = TypeForExtension(filterStr);
                 [filterStr release];
                 if (filterType) [buildFilterList addObject:filterType];
                 p_currentFilterBegin = p_filterSpec + 1;
@@ -73,8 +81,7 @@ static NSArray* BuildAllowedContentTypes(const nfdnfilteritem_t* filterList,
         }
         // add the extension to the array
         NSString* filterStr = [[NSString alloc] initWithUTF8String:p_currentFilterBegin];
-        UTType* filterType = [UTType typeWithFilenameExtension:filterStr
-                                              conformingToType:UTTypeData];
+        UTType* filterType = TypeForExtension(filterStr);
         [filterStr release];
         if (filterType) [buildFilterList addObject:filterType];
     }

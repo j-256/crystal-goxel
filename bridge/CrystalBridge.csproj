@@ -16,6 +16,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Security.Permissions" Version="10.0.5" />
+    <EmbeddedResource Include="native-builds.json" LogicalName="CrystalBridge.NativeBuilds.json" />
   </ItemGroup>
   <Target Name="CopyBridgeRuntimeNotices" AfterTargets="Publish" Condition="'$(SelfContained)' == 'true'">
     <ItemGroup>

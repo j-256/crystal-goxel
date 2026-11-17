@@ -132,6 +132,15 @@ jobs:
           cd "$RUNNER_TEMP"
           "$package/Contents/Resources/Bridge/crystal-bridge" test
           "$package/Contents/MacOS/CrystalGoxel" --help
+      - name: Check native Mac application filters
+        run: |
+          clang -Wall -Wextra -Werror -mmacosx-version-min=15.0 \
+            tests/macos_dialog_test.m -Iext_src/nfd \
+            -framework AppKit -framework UniformTypeIdentifiers \
+            -o build/macos-dialog-test
+          build/macos-dialog-test
+      - name: Check helper startup diagnostics
+        run: python3 -m unittest discover -s tests -p 'native_startup_test.py'
       - name: Archive release download
         run: |
           version="$(python3 scripts/crystal-release.py version)"

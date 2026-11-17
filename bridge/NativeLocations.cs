@@ -10,8 +10,6 @@ internal sealed record NativeLandmark(int ID, string Name, byte Biome, int[] Wor
 internal static class NativeLocations
 {
     internal const string FileName = "locations.json";
-    internal const string ReviewedBiomes = "f79487f55e45182841e976785ea2a0094950917024b68b5b88b3d8d56470f75d";
-    internal const string ReviewedSystem = "aeb36700a47795c8bda8ba3cbdb0ab9b131f4b56b1136f3dd5decf5ebb59178f";
     internal const string HomePointKind = "homePoint";
     internal const string TeleportPointKind = "teleportPoint";
     private const int Format = 2;
@@ -21,7 +19,7 @@ internal static class NativeLocations
     private const int MaxText = 256;
     private static readonly Regex ZoneName = new(@"@Z([0-9]+)\.Name", RegexOptions.CultureInvariant);
 
-    internal static JsonObject Build(IEnumerable<NativeLandmark> points, JsonElement[] biomes, string identity)
+    internal static JsonObject Build(IEnumerable<NativeLandmark> points, JsonElement[] biomes, string identity, NativeBuild profile)
     {
         var names = biomes.Where(b => b.ValueKind == JsonValueKind.Object)
             .ToDictionary(b => b.GetProperty("ID").GetInt32(), b => b.GetProperty("Name").GetString()!);
@@ -46,28 +44,28 @@ internal static class NativeLocations
         }
         var catalog = new JsonObject
         {
-            ["format"] = Format, ["identity"] = identity, ["biomeSha256"] = ReviewedBiomes,
-            ["systemSha256"] = ReviewedSystem, ["hasLandmarks"] = true,
+            ["format"] = Format, ["identity"] = identity, ["biomeSha256"] = profile.BiomeHash,
+            ["systemSha256"] = profile.SystemHash, ["hasLandmarks"] = true,
             ["entriesSha256"] = Digest(entries), ["entries"] = entries
         };
-        Validate(catalog, identity);
+        Validate(catalog, identity, profile);
         return catalog;
     }
 
     private static string Digest(JsonArray entries) => NativeGame.Hash(System.Text.Encoding.UTF8.GetBytes(entries.ToJsonString()));
 
-    internal static void Validate(JsonObject catalog, string identity, bool legacy = false)
+    internal static void Validate(JsonObject catalog, string identity, NativeBuild profile, bool legacy = false)
     {
         if (JsonSerializer.SerializeToUtf8Bytes(catalog, Context.JsonOptions).Length > MaxBytes)
             throw new InvalidDataException("Native location catalog exceeds its size limit");
         if (catalog["format"]?.GetValue<int>() != (legacy ? 1 : Format) ||
             catalog["identity"]?.GetValue<string>() != identity ||
-            catalog["biomeSha256"]?.GetValue<string>() != ReviewedBiomes ||
+            catalog["biomeSha256"]?.GetValue<string>() != profile.BiomeHash ||
             catalog["entries"] is not JsonArray entries || entries.Count is < 1 or > MaxEntries ||
             catalog["entriesSha256"]?.GetValue<string>() != Digest(entries))
             throw new InvalidDataException("Native location catalog fingerprint mismatch");
         if (!legacy && (catalog["hasLandmarks"] is not JsonValue available || !available.TryGetValue<bool>(out var complete) ||
-            (complete ? catalog["systemSha256"]?.GetValue<string>() != ReviewedSystem : catalog["systemSha256"] is not null)))
+            (complete ? catalog["systemSha256"]?.GetValue<string>() != profile.SystemHash : catalog["systemSha256"] is not null)))
             throw new InvalidDataException("Native landmark source fingerprint mismatch");
         var ids = new HashSet<string>();
         foreach (var entry in entries)
@@ -93,18 +91,19 @@ internal static class NativeLocations
 
     internal static JsonObject Create(NativeGame game, NativeWorld world, JsonObject context, string directory, bool replaceLegacy = false)
     {
-        if (world.WorldHash != NativeGame.ReviewedWorld)
-            throw new InvalidDataException("Native location world differs from the inspected installation");
+        NativeBuilds.RequireSame(context, game.Profile);
+        if (world.WorldHash != game.Profile.WorldHash)
+            throw new InvalidDataException("Native location world differs from the verified source build");
         var path = Path.Combine(game.Installation, "Content", "Database", "biome.dat");
-        if (NativeGame.Hash(File.ReadAllBytes(path)) != ReviewedBiomes)
-            throw new InvalidDataException("Native location biome definitions differ from the inspected installation");
+        if (NativeGame.Hash(File.ReadAllBytes(path)) != game.Profile.BiomeHash)
+            throw new InvalidDataException("Native location biome definitions differ from the verified source build");
         var systemPath = Path.Combine(game.Installation, "Content", "Database", "system.dat");
-        if (NativeGame.Hash(File.ReadAllBytes(systemPath)) != ReviewedSystem)
-            throw new InvalidDataException("Native landmark system definitions differ from the inspected installation");
+        if (NativeGame.Hash(File.ReadAllBytes(systemPath)) != game.Profile.SystemHash)
+            throw new InvalidDataException("Native landmark system definitions differ from the verified source build");
         using var system = NativeGame.ReadDatabaseJson(systemPath);
         var landmarks = TeleportPoints(system.RootElement, point => world.Biome(point[0], point[1], point[2]));
         var catalog = Build(world.EntityChunks().SelectMany(game.HomePoints).Concat(landmarks),
-            NativeGame.ReadDatabase(path), TiledContext.Identity(context));
+            NativeGame.ReadDatabase(path), TiledContext.Identity(context), game.Profile);
         var output = Path.Combine(directory, FileName);
         var staging = output + "." + Guid.NewGuid().ToString("N") + ".partial";
         try
@@ -137,6 +136,7 @@ internal static class NativeLocations
     {
         var context = Projects.Read(contextPath);
         TiledContext.Validate(contextPath, context);
+        var profile = NativeBuilds.FromContext(context);
         var directory = Path.GetDirectoryName(Path.GetFullPath(contextPath))!;
         var path = Path.Combine(directory, FileName);
         if (File.Exists(path))
@@ -145,7 +145,7 @@ internal static class NativeLocations
             var catalog = Projects.Read(path);
             if (catalog["format"]?.GetValue<int>() == 1)
             {
-                Validate(catalog, TiledContext.Identity(context), true);
+                Validate(catalog, TiledContext.Identity(context), profile, true);
                 try
                 {
                     using var migrationGame = new NativeGame(context["installation"]!.GetValue<string>());
@@ -161,11 +161,11 @@ internal static class NativeLocations
                     catalog["systemSha256"] = null;
                     catalog["warning"] = "Extra landmarks need the supported installation: " + error.Message;
                     catalog["entriesSha256"] = Digest(catalog["entries"]!.AsArray());
-                    Validate(catalog, TiledContext.Identity(context));
+                    Validate(catalog, TiledContext.Identity(context), profile);
                     return catalog;
                 }
             }
-            Validate(catalog, TiledContext.Identity(context));
+            Validate(catalog, TiledContext.Identity(context), profile);
             return catalog;
         }
         // A sidecar keeps existing world manifests and saved document fingerprints stable

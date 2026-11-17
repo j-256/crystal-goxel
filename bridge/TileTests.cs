@@ -7,6 +7,7 @@ namespace CrystalBridge;
 
 internal static class TileTests
 {
+    internal static NativeBuild LegacyBuild => NativeBuilds.Profiles.Single(p => p.Version == "1.6.9.0" && p.Platform == "Windows");
     private static void Require(bool condition, string label)
     {
         if (!condition) throw new InvalidDataException("Tile test failed: " + label);
@@ -19,8 +20,8 @@ internal static class TileTests
         {
             ["format"] = TiledContext.Format, ["tileSize"] = TiledContext.TileSize,
             ["origin"] = new JsonArray(0, 0, 0), ["installation"] = "missing-synthetic-installation",
-            ["executableSha256"] = NativeGame.ReviewedExecutable,
-            ["worldSha256"] = NativeGame.ReviewedWorld, ["voxelSha256"] = NativeGame.ReviewedVoxels,
+            ["executableSha256"] = LegacyBuild.ExecutableHash,
+            ["worldSha256"] = LegacyBuild.WorldHash, ["voxelSha256"] = LegacyBuild.VoxelHash,
             ["blocks"] = new JsonArray(new JsonObject { ["id"] = 1, ["maxVariant"] = 1 }),
             ["files"] = new JsonObject()
         };

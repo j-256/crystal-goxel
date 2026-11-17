@@ -2,7 +2,12 @@
 using System.Diagnostics;
 using CrystalBridge;
 
-const string Help = """
+var clock = Stopwatch.StartNew();
+var correlation = Guid.NewGuid().ToString("N")[..12];
+var operation = args.Length == 0 || args[0] is "--help" or "-h" ? "help" : args[0];
+try
+{
+    var help = $"""
 Usage: crystal-bridge COMMAND [OPTIONS]
 Offline Crystal Project native world context and Crystal Edit project bridge
 
@@ -37,7 +42,11 @@ No environment variables are required. Native operations need the supported game
 synthetic tests and validation of existing cache files do not need it.
 Exit status: 0 success, 1 runtime failure, 2 usage/precondition, 3 missing dependency
 Game resources stay local. Exports are Crystal Edit voxel NPCs, with native terrain
-kept as reference. Only the inspected Windows 1.6.9.0 installation is supported.
+kept as reference. Windows and macOS game resources for version {NativeBuilds.LatestVersion} are verified;
+Windows 1.6.9.0 resources remain supported for older contexts. --game accepts a
+Windows folder, a Mac .app bundle, or its Contents/Resources folder. New terrain
+must use the exact source build recorded by its cache; create a new cache after
+updating the game. Unknown builds need qualification in a Crystal Goxel update.
 check-construction requires only stationary, unconditional voxel NPCs. It checks
 the original readers, air/liquid motion and solid player contacts in CPU fixtures.
 Export snapshots use format 1 with source text, managed mappings and authored
@@ -45,21 +54,17 @@ cells. Optional newObjectsSolid is boolean, defaults to true, and affects new NP
 allocate reserves project-wide IDs in an identities array of editor positions and IDs.
 These checks do not launch the game or validate a complete gameplay session.
 """;
-if (args.Length == 0)
-{
-    Console.Error.WriteLine(Help);
-    return 2;
-}
-if (args[0] is "--help" or "-h")
-{
-    Console.WriteLine(Help);
-    return 0;
-}
+    if (args.Length == 0)
+    {
+        Console.Error.WriteLine(help);
+        return 2;
+    }
+    if (args[0] is "--help" or "-h")
+    {
+        Console.WriteLine(help);
+        return 0;
+    }
 
-var clock = Stopwatch.StartNew();
-var correlation = Guid.NewGuid().ToString("N")[..12];
-try
-{
     var options = new Dictionary<string, string>();
     var tokens = new List<string>();
     var ended = false;
@@ -76,7 +81,7 @@ try
     {
         if (tokens[i] == "--")
         { if (i + 1 != tokens.Count) throw new ArgumentException("This command does not accept positional arguments"); break; }
-        if (tokens[i] == "--help") { Console.WriteLine(Help); return 0; }
+        if (tokens[i] == "--help") { Console.WriteLine(help); return 0; }
         var parts = tokens[i].Split('=', 2);
         if (!parts[0].StartsWith("--")) throw new ArgumentException("Unexpected positional argument");
         var value = parts.Length == 2 ? parts[1] : ++i < tokens.Count ? tokens[i] : throw new ArgumentException("Missing option value");
@@ -158,6 +163,6 @@ catch (Exception error)
 {
     error = error.GetBaseException();
     var exit = error is ArgumentException or FormatException or OverflowException or InvalidDataException ? 2 : error is FileNotFoundException or DirectoryNotFoundException ? 3 : 1;
-    Console.Error.WriteLine($"crystal-bridge operation={args[0]} result=error exit={exit} elapsedMs={clock.ElapsedMilliseconds} id={correlation} message={error.Message}");
+    Console.Error.WriteLine($"crystal-bridge operation={operation} result=error exit={exit} elapsedMs={clock.ElapsedMilliseconds} id={correlation} message={error.Message}");
     return exit;
 }

@@ -45,6 +45,8 @@ Outputs must not already exist. The tools refuse dirty or mismatched builds, mis
 
 Run the focused bridge and native authoring checks described in [verification](../CRYSTAL_BRIDGE.md#verification). Release contract checks use `python3 -m unittest discover -s tests -p 'release_test.py'`; install pinned `PyYAML==6.0.3` into a virtual environment for workflow-policy checks. Validate YAML with `actionlint` and shell scripts with `shellcheck`. Checks without private game files cannot establish native rendering or gameplay compatibility.
 
+Qualify the latest game release using both Windows and macOS resource sources. When their fingerprints change, verify the terrain, voxel/biome/system data, entity namespace, editor format, original entity readers, and construction physics before updating the compatibility data in `bridge/native-builds.json`. Preserve older profiles and cache identities. Record resource-source checks separately from the application host OS, Windows GUI checks, native dialogs, and complete in-game playtesting. Do not substitute an older supported installation for qualification of the latest release.
+
 ## Publication order
 
 1. Review and integrate the source, then rebuild and verify the committed release revision

@@ -2,7 +2,7 @@
 
 Crystal Goxel is an offline Goxel fork for building Crystal Edit voxel objects across a tiled view of the native Crystal Project world. The editor and viewport are C/C++17. A .NET 10 C# helper reads the user's game resources and invokes the original game's CPU mesh builders through reflection. No game assemblies, textures, world data or decompiled source are distributed with this repository.
 
-The prototype supports the fingerprinted Windows Crystal Project 1.6.9.0 installation and Crystal Edit project format 34. A `mod.json` file is the Crystal Edit project itself; exporting JSON does not require a separate compilation step. The desktop helper launcher supports Windows, macOS and Linux. The Windows x64 editor and self-contained helper have been cross-built and exercised in a Windows 11 ARM64 VM running the x64 package under emulation for process launching, synthetic checks and native world preparation. Windows process and synthetic helper checks are also configured in the Windows CI job. Windows graphical authoring and Crystal Edit UI behavior need testing on a Windows desktop. Native Mac authoring has been exercised on Apple Silicon. The native Mac game installation is not an accepted resource source.
+The bridge supports verified Windows and macOS Crystal Project 1.7.0.1 resources and Crystal Edit project format 34. Windows 1.6.9.0 resources remain supported for existing caches. A `mod.json` file is the Crystal Edit project itself; exporting JSON does not require a separate compilation step. The desktop helper launcher supports Windows, macOS, and Linux. The Windows x64 editor and self-contained helper have been cross-built and exercised in a Windows 11 ARM64 VM running the x64 package under emulation for process launching, synthetic checks, and native world preparation. Windows process and synthetic helper checks are also configured in the Windows CI job. Windows graphical authoring and Crystal Edit UI behavior need testing on a Windows desktop. Native Mac authoring has been exercised on Apple Silicon using both Windows and Mac game resources; resource-source compatibility does not establish Windows application GUI compatibility.
 
 ## Build and open
 
@@ -18,7 +18,7 @@ scripts/package-crystal-macos
 
 The command creates `dist/Crystal Goxel.app` with its own .NET runtime and GLFW library, targeting macOS 15 or later on Apple Silicon. GLFW is built from pinned source for that target; every bundled native binary is checked for its deployment minimum, architecture and dependencies. The minimum follows the helper's [.NET supported OS policy](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md); execution on the oldest target still needs contributor testing. Build-time dependency restoration needs network access. The generated app runs offline without Homebrew or a separate .NET installation. It uses local ad hoc signing for development; it is not a notarized release.
 
-Create a world cache from your own Windows game installation. Choose a new private output directory outside the repository:
+Create a world cache from your own Windows game folder or Mac `Crystal Project.app` bundle. The helper also accepts the bundle's `Contents/Resources` directory. Choose a new private output directory outside the repository:
 
 ```sh
 "dist/Crystal Goxel.app/Contents/Resources/Bridge/crystal-bridge" world \
@@ -29,7 +29,7 @@ Create a world cache from your own Windows game installation. Choose a new priva
   --crystal-context "/path/to/world-cache/world.json"
 ```
 
-You can also use Create tiled world in the Crystal Project panel: choose the Windows game folder and a new cache folder, then create the cache. It stores shared palette assets and a fingerprinted `world.json`, with terrain tiles added as needed. No scene export from the running game is required. Native resources are read directly from the selected installation.
+You can also use Create tiled world in the Crystal Project panel: choose the game folder or use Choose Mac app on Mac, select a new cache folder, then create the cache. It stores shared palette assets and a fingerprinted `world.json`, with terrain tiles added as needed. The manifest records the source version, source platform, and resolved resource directory. No scene export from the running game is required. Native resources are read directly from the selected installation.
 
 A tiled document uses global game coordinates and holds every authored location in one `.gox` project. World X and World Z are horizontal; Height Y is vertical. Go to location loads an 80 x 80 x 80 block neighborhood and frames that location. The panel shows the loaded dimensions, which shrink at supported world edges. Save named locations to return to them from the panel. Follow camera loads terrain around the camera's orbit target as you pan. Changing the view replaces reference geometry while preserving all authored layers, offscreen edits, original imported entities and entity ID reservations.
 
@@ -77,9 +77,15 @@ Native shapes, UVs and variants come from the installed game's mesh builders. Cr
 
 The coordinate transform preserves orientation while changing the vertical axis. With native origin `(ox, oy, oz)`, a game cell `(x, y, z)` maps to Goxel cell `(x - ox, oz - z - 1, y - oy)`. Tiled documents fix this origin at `(0, 0, 0)` for every location; crop documents retain their original crop origin. The `-1` accounts for reversing a cell interval rather than a point. Per-triangle cell ownership keeps edge clicks and inset shapes on the correct grid cell. Reference geometry is never present in authored layer volumes or Crystal Edit exports.
 
-The helper checks executable, voxel database and native world fingerprints before invoking game code. Managed assemblies load from private byte copies in memory, avoiding Windows file locks and assembly cleanup failures. ARM64 hosting retags only those copies of IL-only managed assemblies; it never changes installed files. Generated context and tile artifacts record source and asset SHA-256 values. The world manifest also retains the selected installation path for uncached tile preparation. These generated files include game content and belong with the user's private game resources.
+The helper recognizes verified source-build profiles and checks executable, voxel database, and native world fingerprints before using native resources. Location catalogs also bind their biome and system fingerprints to that profile. Each platform retains its own executable and world fingerprints even when extracted world payloads match. Managed assemblies load from private byte copies in memory, avoiding Windows file locks and assembly cleanup failures. ARM64 hosting retags only those copies of IL-only managed assemblies; it never changes installed files. Generated context and tile artifacts record source and asset SHA-256 values. The world manifest also retains the selected installation path for uncached tile preparation. These generated files include game content and belong with the user's private game resources.
+
+Compatibility work targets the latest game release. New builds are qualified against native terrain preparation, authoring, original entity readers, and construction physics before their profile is added to `bridge/native-builds.json`. Versions and fingerprints are data; lookup and validation code are shared across profiles. Existing caches preserve their recorded source identity: cached content remains usable offline, while uncached terrain needs the original build. Updating the game requires a new cache; resources from different builds or source platforms cannot be mixed. An unknown build produces an unsupported-state diagnostic rather than inheriting another build's assumptions.
 
 ## Verification
+
+On Mac, check native application-bundle filters with `clang -Wall -Wextra -Werror -mmacosx-version-min=15.0 tests/macos_dialog_test.m -Iext_src/nfd -framework AppKit -framework UniformTypeIdentifiers -o build/macos-dialog-test && build/macos-dialog-test`. This exercises the bundled dialog filter implementation without opening an operating system dialog; interactive selection remains a separate check.
+
+Run `python3 -m unittest discover -s tests -p 'native_startup_test.py'` with .NET SDK 10 to verify structured startup diagnostics for missing or malformed compatibility data. These checks build private temporary copies of the helper with synthetic packaging faults and need no game resources.
 
 See [Windows testing](doc/WINDOWS_TESTING.md) for the dated platform evidence, unresolved graphics and UI checks, and contributor reporting instructions. A helper check or successful `--help` command does not establish graphical compatibility.
 

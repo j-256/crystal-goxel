@@ -16,7 +16,7 @@ internal static class SyntheticTests
         {
             ProjectsRoundTrip(scratch); WorldArchive(scratch);
             TileTests.Run(scratch); WorldProjectTests.Run(scratch);
-            LocationTests.Run(scratch);
+            LocationTests.Run(scratch); NativeBuildTests.Run(scratch);
             MemoryHosting(scratch);
         }
         finally { Directory.Delete(scratch, true); }
@@ -54,9 +54,9 @@ internal static class SyntheticTests
         var context = new JsonObject
         {
             ["format"] = 1,
-            ["executableSha256"] = NativeGame.ReviewedExecutable,
-            ["worldSha256"] = NativeGame.ReviewedWorld,
-            ["voxelSha256"] = NativeGame.ReviewedVoxels,
+            ["executableSha256"] = TileTests.LegacyBuild.ExecutableHash,
+            ["worldSha256"] = TileTests.LegacyBuild.WorldHash,
+            ["voxelSha256"] = TileTests.LegacyBuild.VoxelHash,
             ["origin"] = new JsonArray(-4, 10, -4),
             ["size"] = new JsonArray(8, 8, 8),
             ["blocks"] = new JsonArray(new JsonObject { ["id"] = 1, ["maxVariant"] = 1, ["collides"] = true }, new JsonObject { ["id"] = 2, ["maxVariant"] = 3, ["collides"] = false }),

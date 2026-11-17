@@ -9,10 +9,7 @@ namespace CrystalBridge;
 
 internal sealed class NativeGame : IDisposable
 {
-    internal const string ReviewedExecutable = "36f7d413160a4deee36b47fc6ac534e87cadb6f23f57337d4630ec99cedb14e6";
-    internal const string ReviewedWorld = "a93405dccaf04289f84d38be5b994d62b12e207afc8762d0bf79086023401107";
-    internal const string ReviewedVoxels = "2767a8d1298dff7d44d9c440e7b8ff69e549c17a7fd0e01424b7da52123c137b";
-    private const string ReviewedEditor = "315c0398646873fee6f61a8d01a0581b865b356ea9ae0d949672860200108a0f";
+    // Verified build profiles share the editor format and native entity namespace
     internal const int EditorVersion = 34;
     internal const int LastVanillaEntity = 3824;
     private const int VertexCapacity = 2048;
@@ -35,14 +32,14 @@ internal sealed class NativeGame : IDisposable
     internal readonly JsonElement[] Definitions;
     internal string Installation { get; }
     internal string ExecutableHash { get; }
+    internal NativeBuild Profile { get; }
 
     internal NativeGame(string installation)
     {
-        Installation = Path.GetFullPath(installation);
+        Installation = NativeBuilds.ResourceRoot(installation);
         var executable = File.ReadAllBytes(Path.Combine(Installation, "Crystal Project.exe"));
         ExecutableHash = Hash(executable);
-        if (ExecutableHash != ReviewedExecutable)
-            throw new InvalidDataException("This build supports the inspected Windows Crystal Project 1.6.9.0 executable");
+        Profile = NativeBuilds.FromExecutable(ExecutableHash);
         AssemblyLoadContext.Default.Resolving += Resolve;
         try
         {
@@ -58,7 +55,7 @@ internal sealed class NativeGame : IDisposable
             zero = Activator.CreateInstance(vectorType)!;
             types = (Array)cv.GetField("TYPES")!.GetValue(null)!;
             var voxelPath = Path.Combine(Installation, "Content", "Database", "voxel.dat");
-            if (Hash(File.ReadAllBytes(voxelPath)) != ReviewedVoxels) throw new InvalidDataException("Native voxel definitions differ from the inspected installation");
+            if (Hash(File.ReadAllBytes(voxelPath)) != Profile.VoxelHash) throw new InvalidDataException("Native voxel definitions differ from the verified source build");
             Definitions = ReadDatabase(voxelPath);
             if (Definitions.Length != 256) throw new InvalidDataException("Unexpected native block database size");
             var options = new JsonSerializerOptions { IncludeFields = true };
@@ -181,7 +178,7 @@ internal sealed class NativeGame : IDisposable
     internal void CheckEntities(string sourcePath, bool construction = false)
     {
         var editorPath = Path.Combine("Crystal Edit", "Crystal Edit.exe");
-        if (Hash(File.ReadAllBytes(Path.Combine(Installation, editorPath))) != ReviewedEditor) throw new InvalidDataException("Crystal Edit executable differs from the inspected build");
+        if (Hash(File.ReadAllBytes(Path.Combine(Installation, editorPath))) != Profile.EditorHash) throw new InvalidDataException("Crystal Edit executable differs from the verified source build");
         var editor = HostAssembly(editorPath);
         var json = AssemblyLoadContext.Default.LoadFromAssemblyName(editor.GetReferencedAssemblies().Single(a => a.Name == "Newtonsoft.Json"));
         var deserialize = json.GetType("Newtonsoft.Json.JsonConvert", true)!.GetMethod("DeserializeObject", [typeof(string), typeof(Type)])!;

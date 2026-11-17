@@ -27,7 +27,8 @@ internal static class LocationTests
             new(40, "@C@Unknown.Name's Shrine", 2, [16, 255, -16])
         ];
         var identity = TiledContext.Identity(context);
-        var catalog = NativeLocations.Build(points, biomes, identity);
+        var profile = NativeBuilds.FromContext(context);
+        var catalog = NativeLocations.Build(points, biomes, identity, profile);
         var entries = catalog["entries"]!.AsArray();
         Require(entries[0]!["id"]!.GetValue<int>() == 12 &&
             entries[1]!["name"]!.GetValue<string>() == "Fixture Ridge Camp" &&
@@ -60,7 +61,7 @@ internal static class LocationTests
         Require(teleports.Length == 2 && teleports[0].ID == 0 && teleports[0].World.SequenceEqual([3, 11, -5]) &&
             teleports[1].ID == 2 && teleports.All(p => p.Kind == NativeLocations.TeleportPointKind),
             "non-crystal landmarks keep their native indices and omit dynamic home and empty slots");
-        var combined = NativeLocations.Build(points.Concat(teleports).Append(points[0] with { ID = 2 }), biomes, identity);
+        var combined = NativeLocations.Build(points.Concat(teleports).Append(points[0] with { ID = 2 }), biomes, identity, profile);
         Require(combined["entries"]!.AsArray().Count(e => e!["id"]!.GetValue<int>() == 2) == 2,
             "home points and landmarks use distinct source identity namespaces");
         var legacy = (JsonObject)catalog.DeepClone();
@@ -79,7 +80,7 @@ internal static class LocationTests
         void Reject(IEnumerable<NativeLandmark> invalid, string label)
         {
             var failed = false;
-            try { NativeLocations.Build(invalid, biomes, identity); }
+            try { NativeLocations.Build(invalid, biomes, identity, profile); }
             catch (InvalidDataException) { failed = true; }
             Require(failed, label);
         }
@@ -94,12 +95,12 @@ internal static class LocationTests
             .Select(id => new NativeLandmark(id, new string('\u2603', 256), 1, [0, 0, 0])),
             "encoded catalog bytes are bounded before publication");
         rejected = false;
-        try { NativeLocations.Validate(catalog, "other-world-identity"); }
+        try { NativeLocations.Validate(catalog, "other-world-identity", profile); }
         catch (InvalidDataException) { rejected = true; }
         Require(rejected, "catalogs cannot bind to a different native context");
         var changedSystem = (JsonObject)catalog.DeepClone(); changedSystem["systemSha256"] = "changed";
         rejected = false;
-        try { NativeLocations.Validate(changedSystem, identity); }
+        try { NativeLocations.Validate(changedSystem, identity, profile); }
         catch (InvalidDataException) { rejected = true; }
         Require(rejected, "landmark system fingerprints are enforced");
         entries[0]!["world"]![0] = 2;

@@ -39,7 +39,7 @@ If the window cannot open, capture the terminal diagnostic and your graphics-dri
 
 ## Checks with the supported game
 
-Use your own Windows Crystal Project 1.6.9.0 resources and Crystal Edit project format 34. Create a fresh private world cache from Windows so its installation path belongs to that machine; do not reuse a Mac installation path. Choose new cache and output names for each smoke run. The cache folder must not already exist, and its parent folder must be writable.
+Use your own Windows Crystal Project 1.7.0.1 resources and Crystal Edit project format 34. Create a fresh private world cache from Windows so its installation path belongs to that machine; do not reuse a Mac installation path. Choose new cache and output names for each smoke run. The cache folder must not already exist, and its parent folder must be writable.
 
 ```powershell
 $package = 'C:\tools\Crystal Goxel Windows'
