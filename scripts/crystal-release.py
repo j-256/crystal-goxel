@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Stamp builds and prepare checked preview assets without publishing them."""
+"""Set checked versions and prepare release assets without publishing them."""
 import argparse
 import hashlib
 import json
@@ -56,6 +56,30 @@ def source():
     return {"sourceCommit": git("rev-parse", "HEAD"),
             "sourceTree": git("rev-parse", "HEAD^{tree}"),
             "dirty": bool(git("status", "--porcelain", "--untracked-files=normal"))}
+
+
+def set_version(value):
+    if not re.fullmatch(VERSION_PATTERN, value):
+        raise Precondition("Version must be X.Y.Z or X.Y.Z-preview.N")
+    def order(item):
+        core, separator, preview = item.partition("-preview.")
+        return (*map(int, core.split(".")), not separator, int(preview or 0))
+    if order(value) <= order(version()):
+        raise Precondition("Version must advance CRYSTAL_VERSION")
+    branch = git("branch", "--show-current")
+    if not branch:
+        raise Precondition("Version changes require an attached branch")
+    before = source()
+    if before["dirty"]:
+        raise Precondition("Version changes require a clean checkout")
+    tag = f"crystal-v{value}"
+    if git("tag", "--list", tag):
+        raise Precondition(f"Release tag already exists: {tag}")
+    subprocess.run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests",
+                    "-p", "release_test.py"], cwd=ROOT, stdout=sys.stderr, check=True)
+    if source() != before or git("branch", "--show-current") != branch:
+        raise Precondition("Checkout changed during release checks; retry from clean source")
+    (ROOT / "CRYSTAL_VERSION").write_text(value + "\n")
 
 
 def manifest_path(package, platform):
@@ -249,7 +273,8 @@ def verify(directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, epilog=(
-        "Requires Python 3.11+, and Git for stamp/archive/assemble/verify. "
+        "Requires Python 3.11+, and Git for version --set/stamp/archive/assemble/verify. "
+        "version --set also requires PyYAML 6.0.3 for release contract checks. "
         "archive also requires native package checker dependencies: objdump "
         "for Windows; macOS lipo, otool and codesign for Mac. No environment "
         "variables required. CRYSTAL_VERSION is X.Y.Z or X.Y.Z-preview.N; tag names "
@@ -258,9 +283,15 @@ def main():
         "must not exist. Exit: 0 success/help, 1 verification/runtime failure, "
         "2 usage/precondition, 3 missing dependency."))
     commands = parser.add_subparsers(dest="command", required=True)
-    value = commands.add_parser("version", help="print CRYSTAL_VERSION or its numeric core")
-    value.add_argument("--numeric", action="store_true")
-    value.add_argument("--tag", help="require a tag matching CRYSTAL_VERSION")
+    value = commands.add_parser("version", help="print or safely advance CRYSTAL_VERSION",
+        description="Print the version, or advance it after release contract checks. "
+        "Setting requires a clean attached checkout and an unused local release tag. "
+        "Requires Python 3.11+, Git and PyYAML 6.0.3. Creates no commit or tag.")
+    mode = value.add_mutually_exclusive_group()
+    mode.add_argument("--numeric", action="store_true")
+    mode.add_argument("--tag", help="require a tag matching CRYSTAL_VERSION")
+    mode.add_argument("--set", dest="new_version", metavar="VERSION",
+                      help="advance to X.Y.Z or X.Y.Z-preview.N after release checks")
     for name in ("stamp", "archive"):
         command = commands.add_parser(name, help=f"{name} a built package")
         command.add_argument("package", type=Path)
@@ -277,11 +308,20 @@ def main():
     if sys.version_info < (3, 11):
         print("Requires Python 3.11 or later", file=sys.stderr)
         return 3
-    if args.command != "version" and not shutil.which("git"):
+    setting_version = args.command == "version" and args.new_version is not None
+    if (args.command != "version" or setting_version) and not shutil.which("git"):
         print("Missing dependency: git", file=sys.stderr)
         return 3
+    if setting_version:
+        try:
+            __import__("yaml")
+        except ImportError:
+            print("Missing dependency: PyYAML (install PyYAML==6.0.3)", file=sys.stderr)
+            return 3
     try:
         if args.command == "version":
+            if setting_version:
+                set_version(args.new_version)
             value = version(args.tag)
             print(value.split("-", 1)[0] if args.numeric else value)
         elif args.command == "stamp":

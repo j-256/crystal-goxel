@@ -12,7 +12,9 @@ GitHub evaluates a job's `if` condition before applying its matrix, so the guard
 
 ## Build an exact revision
 
-Set `CRYSTAL_VERSION` to `X.Y.Z-preview.N` for a preview or `X.Y.Z` for a stable release. The tag must be `crystal-vVERSION`, keeping the fork's tags distinct from upstream Goxel tags. Commit the changes before building; a dirty source tree is allowed for development packages but rejected by release archiving. The file's name avoids shadowing C++'s `<version>` header on case-insensitive filesystems.
+Use `python3 scripts/crystal-release.py version --set X.Y.Z-preview.N` for a preview or `--set X.Y.Z` for a stable release. Run it from a clean, attached integration or task branch with Python 3.11 or later and `PyYAML==6.0.3` installed. The command requires an advancing version and an unused local release tag, runs the release contract checks before writing `CRYSTAL_VERSION`, and creates no commit, tag, push, or release. Fetch remote tags before selecting a version. Commit the changes before building; a dirty source tree is allowed for development packages but rejected by release archiving. The file's name avoids shadowing C++'s `<version>` header on case-insensitive filesystems.
+
+The tag must be `crystal-vVERSION`, keeping the fork's tags distinct from upstream Goxel tags. Review platform caveats independently of whether a version is a preview or stable.
 
 Build both packages from the same source commit with the [Windows and Mac commands](../README.md#get-started). The package scripts record version, source commit and tree, and whether the build was dirty in `release.json`. They also check native dependencies and notices. The Mac check inspects every bundled Mach-O architecture and deployment target and verifies signatures.
 

@@ -134,6 +134,63 @@ class ReleaseContract(unittest.TestCase):
         with self.assertRaises(release.Precondition):
             release.assemble(self.inputs, output)
 
+    def prepare_version_checks(self, passes=True):
+        checks = self.repo / "tests/release_test.py"
+        checks.parent.mkdir()
+        checks.write_text("import unittest\nclass ReleaseGate(unittest.TestCase):\n"
+                          f"    def test_contract(self): self.assertTrue({passes!r})\n")
+        self.git("add", "tests/release_test.py")
+        self.commit()
+
+    def test_version_update_runs_checks_before_changing_source(self):
+        self.prepare_version_checks()
+        setter = getattr(release, "set_version", None)
+        self.assertTrue(callable(setter), "Missing guarded version setter")
+        setter("0.1.0")
+        self.assertEqual(release.version("crystal-v0.1.0"), "0.1.0")
+        self.assertEqual(self.git("diff", "--name-only"), "CRYSTAL_VERSION")
+        self.assertEqual(self.git("tag", "--list"), "")
+
+    def test_version_update_rejects_dirty_and_detached_checkouts(self):
+        self.prepare_version_checks()
+        (self.repo / "untracked.txt").write_text("unfinished work\n")
+        with self.assertRaisesRegex(release.Precondition, "clean"):
+            release.set_version("0.1.0")
+        (self.repo / "untracked.txt").unlink()
+        self.git("checkout", "--detach", "-q")
+        with self.assertRaisesRegex(release.Precondition, "branch"):
+            release.set_version("0.1.0")
+        self.assertEqual(release.version(), "0.1.0-preview.1")
+
+    def test_version_update_rejects_invalid_nonadvancing_and_tagged_versions(self):
+        self.prepare_version_checks()
+        for value in ("0.1.0-preview.1", "0.0.9", "0.1.0-preview.0", "01.0.0", "garbage"):
+            with self.subTest(version=value), self.assertRaises(release.Precondition):
+                release.set_version(value)
+        self.git("tag", "crystal-v0.1.0")
+        with self.assertRaisesRegex(release.Precondition, "tag"):
+            release.set_version("0.1.0")
+        self.assertEqual(release.version(), "0.1.0-preview.1")
+
+    def test_version_update_preserves_source_when_release_checks_fail(self):
+        self.prepare_version_checks(passes=False)
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.set_version("0.1.0")
+        self.assertEqual(release.version(), "0.1.0-preview.1")
+
+    def test_version_update_orders_preview_and_stable_versions(self):
+        self.prepare_version_checks()
+        release.set_version("0.1.0-preview.2")
+        self.git("add", "CRYSTAL_VERSION")
+        self.commit()
+        release.set_version("0.1.0")
+        self.git("add", "CRYSTAL_VERSION")
+        self.commit()
+        with self.assertRaises(release.Precondition):
+            release.set_version("0.1.0-preview.3")
+        release.set_version("0.1.1-preview.1")
+        self.assertEqual(release.version(), "0.1.1-preview.1")
+
 
 class RunnerPolicy(unittest.TestCase):
     def test_every_job_requires_public_visibility_and_standard_runner(self):
